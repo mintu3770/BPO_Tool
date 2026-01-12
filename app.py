@@ -7,108 +7,98 @@ import time
 import io
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="BPO LeadGen Pro", page_icon="💼", layout="wide")
+st.set_page_config(page_title="BPO LeadGen Pro (Debug Mode)", page_icon="🐞", layout="wide")
 
-# --- SIDEBAR: CONFIGURATION ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.header("⚙️ Configuration")
     if "GOOGLE_API_KEY" in st.secrets:
         api_key = st.secrets["GOOGLE_API_KEY"]
-        st.success("✅ API Key loaded securely")
+        st.success("✅ API Key loaded")
     else:
         api_key = st.text_input("Enter Gemini API Key", type="password")
-        st.warning("⚠️ No secrets.toml found. Using manual input.")
 
-# --- BACKEND LOGIC ---
+# --- FUNCTIONS ---
 def search_web(query):
-    """Searches DuckDuckGo for live data."""
+    """Searches with debug output."""
     try:
-        results = DDGS().text(query, max_results=10)
-        return "\n".join([f"- {r['title']}: {r['body']} (Link: {r['href']})" for r in results])
+        # Use the 'news' backend for fresher results, or default to text
+        with st.status(f"🔍 Searching: {query}...", expanded=True) as status:
+            results = DDGS().text(query, max_results=10)
+            
+            if not results:
+                status.update(label="❌ No search results found!", state="error")
+                return None
+            
+            # Formulate context
+            context = "\n".join([f"Title: {r['title']}\nSnippet: {r['body']}\nLink: {r['href']}" for r in results])
+            status.update(label="✅ Search complete!", state="complete")
+            
+            # DEBUG: Show what the search engine actually found
+            with st.expander("👀 View Raw Search Results (Debug)"):
+                st.text(context)
+                
+            return context
     except Exception as e:
-        st.error(f"Search Error: {e}")
+        st.error(f"Search Engine Error: {e}")
         return None
 
-def extract_leads_with_retry(context, region, service, count, retries=3):
-    """Uses Gemini to structure data with Retry Logic for 429 Errors."""
-    if not api_key:
-        st.error("❌ Missing API Key.")
-        return []
-    
+def extract_leads(context, count):
+    """Extracts leads with strict JSON formatting."""
     genai.configure(api_key=api_key)
-    # Using 'gemini-1.5-flash' as it is the fastest/cheapest
     model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = f"""
-    You are a BPO Sales Lead Researcher.
-    Analyze the search results below and extract exactly {count} companies in {region} that would likely need {service}.
+    You are a data extraction bot. 
+    Extract exactly {count} companies from the text below.
     
-    CRITERIA:
-    1. Phone Number is the MOST IMPORTANT field. Look for Corporate HQ lines.
-    2. Decision Maker should be relevant to {service}.
+    RETURN ONLY RAW JSON. NO MARKDOWN. NO TEXT.
+    Structure: [{{ "Company": "...", "Location": "...", "Decision_Maker": "...", "Phone": "...", "Link": "..." }}]
     
-    OUTPUT FORMAT:
-    Return ONLY a raw JSON list of objects. No markdown.
-    [
-        {{"Company": "Name", "Location": "City", "Decision_Maker": "Role", "Phone": "+1-555...", "Email_Or_Link": "url"}}
-    ]
+    If no phone is found, write "General HQ Line".
     
-    Search Context:
+    Text to analyze:
     {context}
     """
     
-    for attempt in range(retries):
-        try:
-            response = model.generate_content(prompt)
-            cleaned_json = response.text.strip().replace('```json', '').replace('```', '')
-            return json.loads(cleaned_json)
-        except Exception as e:
-            if "429" in str(e):
-                wait_time = (attempt + 1) * 5  # Wait 5s, then 10s, then 15s
-                st.warning(f"⚠️ API Busy (429). Retrying in {wait_time} seconds...")
-                time.sleep(wait_time)
-            else:
-                st.error(f"AI Extraction Error: {e}")
-                return []
-    
-    st.error("❌ Failed after multiple retries. Try reducing the number of leads.")
-    return []
-
-# --- MAIN INTERFACE ---
-st.title("💼 BPO Lead Generation Dashboard")
-
-col1, col2, col3 = st.columns(3)
-with col1:
-    target_region = st.selectbox("Target Geography", ["USA", "UK", "India"])
-with col2:
-    service_focus = st.selectbox("Service Pitch", ["Hiring", "Customer Support", "Sourcing"])
-with col3:
-    num_leads = st.slider("Leads count", 5, 20, 5)
-
-if st.button("🚀 Generate Leads", type="primary"):
-    if not api_key:
-        st.error("🛑 Please configure your API key.")
-    else:
-        with st.spinner(f"Searching verified sources for {target_region}..."):
-            search_query = f"List of companies {target_region} contact details headquarters phone number for {service_focus}"
-            context_data = search_web(search_query)
+    try:
+        response = model.generate_content(prompt)
+        
+        # DEBUG: Show what the AI actually replied
+        with st.expander("🤖 View Raw AI Response (Debug)"):
+            st.code(response.text)
             
-            if context_data:
-                leads_data = extract_leads_with_retry(context_data, target_region, service_focus, num_leads)
-                
-                if leads_data:
-                    df = pd.DataFrame(leads_data)
-                    st.success(f"Successfully found {len(leads_data)} leads!")
-                    st.dataframe(df, use_container_width=True)
-                    
-                    # Excel Download
-                    buffer = io.BytesIO()
-                    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                        df.to_excel(writer, index=False, sheet_name='Leads')
-                    
-                    st.download_button(
-                        label="📥 Download Excel",
-                        data=buffer.getvalue(),
-                        file_name=f"Leads.xlsx",
-                        mime="application/vnd.ms-excel"
-                    )
+        # Clean the response to remove ```json or ```
+        cleaned = response.text.strip().replace("```json", "").replace("```", "")
+        return json.loads(cleaned)
+        
+    except Exception as e:
+        st.error(f"AI Parsing Error: {e}")
+        return []
+
+# --- MAIN UI ---
+st.title("🐞 BPO LeadGen (Debug Mode)")
+st.warning("This mode shows raw data to help fix the 'No Leads' error.")
+
+region = st.selectbox("Region", ["USA Startups", "UK FTSE 100", "India NIFTY 50"])
+service = st.selectbox("Service", ["Hiring", "Support", "Sourcing"])
+
+if st.button("🚀 Run Debug Search"):
+    if not api_key:
+        st.error("Missing API Key")
+    else:
+        # 1. Broaden the query to ensure we get hits
+        query = f"List of {region} companies with corporate headquarters phone number contact details"
+        
+        context = search_web(query)
+        
+        if context:
+            st.info("Sending data to AI...")
+            leads = extract_leads(context, 5)
+            
+            if leads:
+                st.success("✅ Extraction Successful!")
+                df = pd.DataFrame(leads)
+                st.dataframe(df)
+            else:
+                st.error("❌ AI returned empty list or invalid JSON.")
