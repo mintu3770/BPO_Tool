@@ -6,6 +6,7 @@ import json
 import time
 import io
 import random
+import re
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="BPO LeadGen Pro", page_icon="💼", layout="wide")
@@ -30,7 +31,6 @@ with st.sidebar:
             api_key = sec_api
             search_engine_id = sec_cx
             
-            # CONNECTION CHECKER
             if st.button("Test API Connection"):
                 try:
                     genai.configure(api_key=api_key)
@@ -44,7 +44,7 @@ with st.sidebar:
             search_engine_id = st.text_input("Search Engine ID (cx)")
             
     st.divider()
-    st.info("💡 **Tip:** Now searches specifically for 'Contact Us' and 'Head Office' pages, ignoring Investor News.")
+    st.info("💡 **Tip:** This version captures 'Click Link' leads if the phone number is hidden in the website.")
 
 # --- FUNCTIONS ---
 
@@ -80,27 +80,27 @@ def search_google_real(query, api_key, cx):
     except Exception as e:
         return f"API_ERROR: {str(e)}"
 
-def extract_with_smart_ai(context, region, service, count, api_key):
-    """Uses Gemini 1.5 Flash to extract data."""
+def extract_with_lenient_ai(context, region, service, count, api_key):
+    """Uses Gemini 1.5 Flash with LENIENT instructions to capture more leads."""
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = f"""
-    You are a BPO Research Analyst. Analyze the Google Search Results below.
+    You are a Lead Generation Specialist. Analyze the Google Search Results below.
     
-    GOAL: Find {count} companies in {region} that might need {service}.
+    GOAL: List {count} companies in {region} needing {service}.
     
-    INSTRUCTIONS:
-    1. **Look for Phone Numbers:** Scan the 'Snippet' text for phone numbers (e.g., +1, +44, 020, 1-800).
-    2. **Strict Matching:** If a snippet has a Company Name but NO phone number, write "N/A" for the phone. Do not guess.
-    3. **Decision Maker:** Infer the likely department based on {service} (e.g., "HR Dept" for Hiring, "Procurement" for Sourcing).
+    RULES:
+    1. **Phone Numbers:** Extract any phone number digits found in the snippet.
+    2. **Fallback:** If the snippet matches a company but has NO phone number, write "Link in Excel" in the Phone field. DO NOT discard the lead.
+    3. **Cleanup:** Remove text like "Give a missed call on" and just keep the digits if possible.
     
     INPUT CONTEXT:
     {context}
     
     OUTPUT FORMAT (Return strictly a JSON list):
     [
-        {{"Company": "Name", "Location": "City/Region", "Decision_Maker": "Department/Role", "Phone": "Extracted Number or N/A", "Source_URL": "Link"}}
+        {{"Company": "Name", "Location": "City/Region", "Decision_Maker": "Department/Role", "Phone": "Number or 'Link in Excel'", "Source_URL": "Link"}}
     ]
     """
     try:
@@ -111,14 +111,13 @@ def extract_with_smart_ai(context, region, service, count, api_key):
         return f"AI_ERROR: {str(e)}"
 
 # --- MAIN APP ---
-st.title("🛡️ BPO LeadGen Pro (Smart Search)")
+st.title("🛡️ BPO LeadGen Pro (Lenient Mode)")
 
-# --- FIXED MAPPING: REMOVED INVESTOR RESTRICTIONS ---
+# --- FIXED MAPPING: OPTIMIZED FOR CONTACT PAGES ---
 REGION_MAP = {
-    # We search for "Head Office" and exclude "News" explicitly
-    "UK FTSE 100": "UK FTSE 100 'Head Office' contact number -news -jobs",
-    "USA Startups": "USA tech startup 'Corporate Headquarters' phone number -news -release",
-    "India NIFTY 50": "India NIFTY 50 'Registered Office' contact number -news -recruitment"
+    "UK FTSE 100": "UK FTSE 100 'Head Office' contact number",
+    "USA Startups": "USA tech startup 'Corporate Headquarters' phone number",
+    "India NIFTY 50": "India NIFTY 50 'Customer Care' contact number"
 }
 
 c1, c2, c3 = st.columns(3)
@@ -149,11 +148,8 @@ if st.button("🚀 Generate Leads", type="primary"):
         else:
             with st.status("🔍 Searching Google Live...", expanded=True) as status:
                 
-                # --- FIXED QUERY ---
-                # 1. Removed 'site:investors' (Causes news results)
-                # 2. Added '-news' (Filters out articles)
-                # 3. Explicitly asks for "Phone" or "Tel"
-                query = f"{search_term} {service} 'Phone' OR 'Tel' OR 'Call us' -news -release"
+                # Broad query to catch both "Phone" and "Contact" pages
+                query = f"{search_term} {service} -news -jobs"
                 
                 context = search_google_real(query, api_key, search_engine_id)
                 
@@ -166,7 +162,7 @@ if st.button("🚀 Generate Leads", type="primary"):
                         st.text(context)
                     
                     status.update(label="🧠 Analyzing with AI...", state="running")
-                    leads = extract_with_smart_ai(context, region_select, service, count, api_key)
+                    leads = extract_with_lenient_ai(context, region_select, service, count, api_key)
                     
                     if isinstance(leads, list) and leads:
                         status.update(label="✅ Success!", state="complete")
@@ -183,6 +179,6 @@ if st.button("🚀 Generate Leads", type="primary"):
                         st.download_button("📥 Download Verified Data", buffer.getvalue(), "Real_Leads.xlsx")
                     else:
                         status.update(label="⚠️ No structured data found.", state="error")
-                        st.warning("Google found results, but they didn't contain clear phone numbers. Try 'Simulation Mode' to test the Excel format.")
+                        st.warning("Google found results, but AI couldn't parse them. Try 'Simulation Mode'.")
                 else:
                     status.update(label="❌ No results found", state="error")
