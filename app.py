@@ -34,7 +34,6 @@ with st.sidebar:
             if st.button("Test API Connection"):
                 try:
                     genai.configure(api_key=api_key)
-                    # Check specifically for gemini-pro
                     model = genai.GenerativeModel('gemini-pro')
                     response = model.generate_content("Hello")
                     st.success(f"Connected to gemini-pro!")
@@ -46,7 +45,7 @@ with st.sidebar:
             search_engine_id = st.text_input("Search Engine ID (cx)")
             
     st.divider()
-    st.info("💡 **Tip:** This version uses a Regex Safety Net. If AI fails, it manually hunts for digits in the text.")
+    st.info("💡 **Directory Hack:** This version searches Bloomberg/Reuters profiles which often show the phone number in the snippet!")
 
 # --- FUNCTIONS ---
 
@@ -85,19 +84,20 @@ def search_google_real(query, api_key, cx):
 def extract_with_bulletproof_ai(context, region, service, count, api_key):
     """Hybrid Extraction: Tries AI, falls back to manual Regex if AI fails."""
     
-    # 1. SETUP MODEL (Switched to 'gemini-pro' to fix 404 error)
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-pro')
     
     prompt = f"""
-    Analyze the text below and list companies found.
+    Analyze the text below. It contains business directory profiles.
+    Extract the Company Name and Phone Number from each snippet.
+    
     Format each line strictly like this (Pipe Separated):
     Company Name | Phone Number | Decision Maker Role | Source Link
     
     RULES:
-    1. If Phone is missing, write "Link in Excel".
-    2. If Role is missing, write "N/A".
-    3. Do not add bolding or markdown. Just the text.
+    1. Phone numbers usually look like "+1...", "+44...", "020...". Extract them exactly.
+    2. If Phone is missing, write "Link in Excel".
+    3. Decision Maker: Guess the role based on "{service}" (e.g. "HR Director" or "Ops Manager").
     
     INPUT TEXT:
     {context}
@@ -121,39 +121,41 @@ def extract_with_bulletproof_ai(context, region, service, count, api_key):
                     "Location": region 
                 })
     except Exception as ai_error:
-        print(f"AI Failed: {ai_error}") # Continue to backup
+        print(f"AI Failed: {ai_error}") 
         
-    # 3. REGEX BACKUP (If AI returned nothing or crashed)
+    # 3. REGEX BACKUP (If AI returned nothing)
     if not extracted_leads:
-        # Regex to find phone-like patterns associated with text
-        # Looks for patterns like +44, 020, 1-800 followed by digits
         lines = context.split('\n')
+        current_company = "Unknown"
         for line in lines:
             if "Source:" in line:
-                current_company = line.replace("Source:", "").strip()
+                current_company = line.replace("Source:", "").replace("Profile", "").strip()
             elif "Snippet:" in line or "Text:" in line:
-                # Look for phone numbers in the text manually
-                phones = re.findall(r'(\+?\d[\d -]{8,15})', line)
+                # Regex for Intl formats (UK, US, India)
+                phones = re.findall(r'(\+?\d[\d \-\(\)]{8,16})', line)
                 if phones:
-                    # Found a number manually!
-                    extracted_leads.append({
-                        "Company": current_company if 'current_company' in locals() else "Unknown",
-                        "Phone": phones[0],
-                        "Decision_Maker": "N/A",
-                        "Source_URL": "See Search Results",
-                        "Location": region
-                    })
+                    # Filter out short dates/years that look like phones
+                    valid_phones = [p for p in phones if len(re.sub(r'\D', '', p)) > 8]
+                    if valid_phones:
+                        extracted_leads.append({
+                            "Company": current_company,
+                            "Phone": valid_phones[0],
+                            "Decision_Maker": "N/A",
+                            "Source_URL": "See Search Results",
+                            "Location": region
+                        })
 
     return extracted_leads
 
 # --- MAIN APP ---
-st.title("🛡️ BPO LeadGen Pro (Bulletproof Mode)")
+st.title("🛡️ BPO LeadGen Pro (Directory Mode)")
 
-# --- FIXED MAPPING: FORCE "TELEPHONE" IN SEARCH ---
+# --- NEW STRATEGY: TARGET BLOOMBERG/REUTERS ---
+# This forces Google to look at profiles that LIST phone numbers in plain text.
 REGION_MAP = {
-    "UK FTSE 100": "UK plc 'Contact Us' (Telephone OR Tel) -news -jobs",
-    "USA Startups": "USA Inc 'Contact Us' (Phone OR Call) -news -jobs",
-    "India NIFTY 50": "India Limited 'Contact Us' (Tel OR Phone) -news -jobs"
+    "UK FTSE 100": "site:bloomberg.com/profile 'United Kingdom' 'Phone' OR 'Tel' -news",
+    "USA Startups": "site:bloomberg.com/profile 'United States' 'Phone' OR 'Tel' -news",
+    "India NIFTY 50": "site:moneycontrol.com OR site:bloomberg.com/profile 'India' 'Phone' -news"
 }
 
 c1, c2, c3 = st.columns(3)
@@ -182,8 +184,9 @@ if st.button("🚀 Generate Leads", type="primary"):
         if not api_key or not search_engine_id:
             st.error("❌ Missing Credentials")
         else:
-            with st.status("🔍 Searching Google Live...", expanded=True) as status:
+            with st.status("🔍 Searching Business Directories...", expanded=True) as status:
                 
+                # We specifically hunt for the "Phone" keyword in the profile snippet
                 query = f"{search_term} {service}"
                 context = search_google_real(query, api_key, search_engine_id)
                 
@@ -195,17 +198,16 @@ if st.button("🚀 Generate Leads", type="primary"):
                     with st.expander("👀 View Raw Google Results", expanded=False):
                         st.text(context)
                     
-                    status.update(label="🧠 Analyzing with AI (Backup: Regex)...", state="running")
+                    status.update(label="🧠 Analyzing with AI...", state="running")
                     
-                    # 1. Run Hybrid Extraction
                     leads = extract_with_bulletproof_ai(context, region_select, service, count, api_key)
                     
                     if leads:
                         status.update(label="✅ Success!", state="complete")
                         df = pd.DataFrame(leads)
                         
-                        # Filter bad rows (headers)
-                        df = df[df['Company'] != "Company Name"] 
+                        # Filter bad rows
+                        df = df[df['Company'].str.len() < 50] 
                         
                         st.dataframe(df, use_container_width=True)
                         
@@ -215,6 +217,6 @@ if st.button("🚀 Generate Leads", type="primary"):
                         st.download_button("📥 Download Verified Data", buffer.getvalue(), "Real_Leads.xlsx")
                     else:
                         status.update(label="⚠️ Extraction Failed.", state="error")
-                        st.error("Neither AI nor Regex found valid data in these search results.")
+                        st.error("Could not find phone numbers. Directories might be blocking the snippets.")
                 else:
                     status.update(label="❌ No results found", state="error")
