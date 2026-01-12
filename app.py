@@ -1,68 +1,72 @@
 import streamlit as st
 import google.generativeai as genai
-from duckduckgo_search import DDGS
+import requests
 import pandas as pd
 import json
 import time
 import io
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="BPO LeadGen Pro", page_icon="💼", layout="wide")
+st.set_page_config(page_title="BPO LeadGen Pro (Official API)", page_icon="💼", layout="wide")
 
 # --- SIDEBAR: CONFIGURATION ---
 with st.sidebar:
     st.header("⚙️ Configuration")
     
-    # 1. Load API Key securely
-    if "GOOGLE_API_KEY" in st.secrets:
-        api_key = st.secrets["GOOGLE_API_KEY"]
-        st.success("✅ API Key loaded securely")
+    # Check for Keys
+    api_key = st.secrets.get("GOOGLE_API_KEY")
+    search_engine_id = st.secrets.get("SEARCH_ENGINE_ID")
+
+    if api_key and search_engine_id:
+        st.success("✅ Credentials Loaded")
     else:
-        api_key = st.text_input("Enter Gemini API Key", type="password")
-        if not api_key:
-            st.warning("⚠️ Please enter your API Key to proceed.")
+        st.error("❌ Missing Credentials")
+        st.info("Add GOOGLE_API_KEY and SEARCH_ENGINE_ID to secrets.")
+        api_key = st.text_input("Manual API Key", type="password")
+        search_engine_id = st.text_input("Manual Search Engine ID")
 
     st.divider()
-    st.info("💡 **Tip:** This tool extracts data from live search results. Always verify phone numbers before calling.")
+    st.markdown("Uses **Google Custom Search API** (Reliable & Block-Free).")
 
 # --- FUNCTIONS ---
 
-def search_web(query):
-    """Searches using 'html' backend to avoid Cloud blocks."""
+def search_google(query, api_key, cx):
+    """Searches using Google's Official JSON API."""
+    url = "https://www.googleapis.com/customsearch/v1"
+    params = {
+        "key": api_key,
+        "cx": cx,
+        "q": query,
+        "num": 10  # Max allowed per request
+    }
+    
     try:
-        # UX: Show a status spinner that updates
-        with st.status(f"🔍 Searching: {query}...", expanded=True) as status:
+        response = requests.get(url, params=params)
+        data = response.json()
+        
+        # Check for errors in the API response
+        if "error" in data:
+            st.error(f"Google Search API Error: {data['error']['message']}")
+            return None
             
-            # ATTEMPT 1: HTML Backend (Most reliable for Cloud)
-            results = DDGS().text(query, max_results=10, backend="html")
+        if "items" not in data:
+            return None
             
-            # ATTEMPT 2: Lite Backend (Fallback)
-            if not results:
-                time.sleep(1)
-                results = DDGS().text(query, max_results=10, backend="lite")
-            
-            if not results:
-                status.update(label="❌ Search engine blocked or found no results.", state="error")
-                return None
-            
-            # Format results for the AI
-            context = "\n".join([f"Title: {r['title']}\nSnippet: {r['body']}\nLink: {r['href']}" for r in results])
-            status.update(label="✅ Search complete! Data found.", state="complete")
-            return context
+        # Format results for Gemini
+        results = data["items"]
+        context = "\n".join([f"Title: {r['title']}\nSnippet: {r.get('snippet', '')}\nLink: {r['link']}" for r in results])
+        return context
 
     except Exception as e:
-        st.error(f"Search Engine Error: {e}")
+        st.error(f"Request Failed: {e}")
         return None
 
-def extract_leads_with_retry(context, region, service, count, retries=3):
-    """Uses Gemini to structure data, with retry logic for rate limits."""
+def extract_leads_with_ai(context, region, service, count):
+    """Uses Gemini to structure data."""
     if not api_key:
-        st.error("❌ Missing API Key.")
         return []
     
     genai.configure(api_key=api_key)
-    
-    # FIX: Switched to 'gemini-pro' which is universally available on v1beta
     model = genai.GenerativeModel('gemini-pro')
     
     prompt = f"""
@@ -75,7 +79,7 @@ def extract_leads_with_retry(context, region, service, count, retries=3):
     3. If a field is missing, write "N/A".
     
     OUTPUT FORMAT:
-    Return ONLY a raw JSON list of objects. Do not use Markdown blocks (no ```json).
+    Return ONLY a raw JSON list of objects. No markdown blocks.
     [
         {{"Company": "Name", "Location": "City", "Decision_Maker": "Role", "Phone": "+1-555...", "Email_Or_Link": "url"}}
     ]
@@ -84,34 +88,17 @@ def extract_leads_with_retry(context, region, service, count, retries=3):
     {context}
     """
     
-    for attempt in range(retries):
-        try:
-            response = model.generate_content(prompt)
-            
-            # Clean response
-            cleaned_json = response.text.strip().replace('```json', '').replace('```', '')
-            
-            # Parse JSON
-            return json.loads(cleaned_json)
-            
-        except Exception as e:
-            if "429" in str(e):
-                wait_time = (attempt + 1) * 5
-                st.warning(f"⚠️ API Busy (Quota Limit). Retrying in {wait_time}s...")
-                time.sleep(wait_time)
-            elif "404" in str(e):
-                st.error("❌ Model Error: The API key cannot access the model. Try creating a new API key.")
-                return []
-            else:
-                st.error(f"AI Extraction Error: {e}")
-                return []
-    
-    st.error("❌ Failed after multiple retries. Try a new API key or reduce the lead count.")
-    return []
+    try:
+        response = model.generate_content(prompt)
+        cleaned_json = response.text.strip().replace('```json', '').replace('```', '')
+        return json.loads(cleaned_json)
+    except Exception as e:
+        st.error(f"AI Extraction Error: {e}")
+        return []
 
 # --- MAIN INTERFACE ---
 st.title("💼 BPO Lead Generation Dashboard")
-st.markdown("Generate verified company leads with **Decision Makers** & **Phone Numbers** for outsourcing services.")
+st.caption("Powered by Google Custom Search & Gemini Pro")
 
 # Input Columns
 col1, col2, col3 = st.columns(3)
@@ -129,38 +116,43 @@ with col2:
     )
 
 with col3:
-    num_leads = st.slider("Number of Companies to Fetch", min_value=5, max_value=15, value=5)
+    num_leads = st.slider("Number of Companies", 5, 10, 5)
 
-# --- EXECUTION BUTTON ---
+# --- EXECUTION ---
 if st.button("🚀 Generate Leads", type="primary"):
-    if not api_key:
-        st.error("🛑 Please configure your API key in the sidebar.")
+    if not api_key or not search_engine_id:
+        st.error("🛑 Please configure your secrets.toml with API Key and Search Engine ID.")
     else:
-        # 1. Search
-        search_query = f"List of companies {target_region} corporate headquarters phone number contact details for {service_focus}"
-        context_data = search_web(search_query)
-        
-        if context_data:
-            # 2. Extract with AI
-            with st.spinner("🤖 AI is analyzing search results..."):
-                leads_data = extract_leads_with_retry(context_data, target_region, service_focus, num_leads)
+        with st.status("🔍 Searching Google...", expanded=True) as status:
+            # 1. Search
+            search_query = f"List of companies {target_region} corporate headquarters phone number contact details for {service_focus}"
+            context_data = search_google(search_query, api_key, search_engine_id)
             
-            if leads_data:
-                # 3. Display Results
-                df = pd.DataFrame(leads_data)
-                st.success(f"Successfully found {len(leads_data)} leads!")
-                st.dataframe(df, use_container_width=True)
+            if context_data:
+                status.update(label="✅ Search Complete! Analyzing...", state="running")
                 
-                # 4. Excel Download
-                buffer = io.BytesIO()
-                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                    df.to_excel(writer, index=False, sheet_name='Leads')
+                # 2. AI Extraction
+                leads_data = extract_leads_with_ai(context_data, target_region, service_focus, num_leads)
                 
-                st.download_button(
-                    label="📥 Download Results as Excel",
-                    data=buffer.getvalue(),
-                    file_name=f"BPO_Leads_{time.strftime('%Y%m%d')}.xlsx",
-                    mime="application/vnd.ms-excel"
-                )
+                if leads_data:
+                    status.update(label="✅ Leads Generated!", state="complete")
+                    
+                    # 3. Display & Export
+                    df = pd.DataFrame(leads_data)
+                    st.success(f"Found {len(leads_data)} verified leads.")
+                    st.dataframe(df, use_container_width=True)
+                    
+                    buffer = io.BytesIO()
+                    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                        df.to_excel(writer, index=False, sheet_name='Leads')
+                    
+                    st.download_button(
+                        label="📥 Download Excel",
+                        data=buffer.getvalue(),
+                        file_name=f"BPO_Leads_{time.strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.ms-excel"
+                    )
+                else:
+                    status.update(label="⚠️ AI could not format data.", state="error")
             else:
-                st.warning("The AI found search results but couldn't format them. Try searching for a different region.")
+                status.update(label="❌ No results found via Google API.", state="error")
