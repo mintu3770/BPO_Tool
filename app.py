@@ -1,5 +1,6 @@
 # =====================================================
-# BPO LeadGen Pro – Country & Company-Class Enforced
+# BPO LeadGen Pro – Intelligence Edition
+# Market Cap + Startup Verification
 # =====================================================
 
 import streamlit as st
@@ -12,65 +13,33 @@ import random
 import re
 import logging
 
-# =====================================================
-# PAGE CONFIG
-# =====================================================
-
-st.set_page_config(
-    page_title="BPO LeadGen Pro",
-    page_icon="💼",
-    layout="wide"
-)
-
+st.set_page_config(page_title="BPO LeadGen Pro", page_icon="💼", layout="wide")
 logging.basicConfig(level=logging.INFO)
 
 # =====================================================
-# REGION + COMPANY CLASS MAP (CRITICAL CHANGE)
+# TARGET CONFIG
 # =====================================================
 
+MIN_MARKET_CAP = 1_000_000_000  # $1B minimum for listed companies
+
 REGION_MAP = {
-    "UK – Startups": {
-        "query": "UK startup company headquarters contact",
-        "gl": "uk",
-        "signals": ["startup", "limited", "ltd", "ventures"],
-        "class": "Startup"
-    },
-    "UK – Top Priced Companies": {
-        "query": "FTSE 100 plc headquarters contact",
-        "gl": "uk",
-        "signals": ["plc", "FTSE"],
-        "class": "Listed Enterprise"
-    },
-    "USA – Startups": {
-        "query": "US startup company headquarters contact",
-        "gl": "us",
-        "signals": ["startup", "inc", "ventures"],
-        "class": "Startup"
-    },
-    "USA – Top Priced Companies": {
-        "query": "S&P 500 company headquarters contact",
-        "gl": "us",
-        "signals": ["NYSE", "NASDAQ", "Corp"],
-        "class": "Listed Enterprise"
-    },
-    "India – Startups": {
-        "query": "Indian startup private limited company contact",
-        "gl": "in",
-        "signals": ["startup", "pvt", "private"],
-        "class": "Startup"
-    },
-    "India – Top Priced Companies": {
-        "query": "NIFTY 50 listed company corporate office contact",
-        "gl": "in",
-        "signals": ["limited", "ltd", "NSE", "BSE"],
-        "class": "Listed Enterprise"
-    }
+    "UK – Startups": {"gl": "uk", "class": "Startup"},
+    "UK – Top Priced Companies": {"gl": "uk", "class": "Listed Enterprise"},
+    "USA – Startups": {"gl": "us", "class": "Startup"},
+    "USA – Top Priced Companies": {"gl": "us", "class": "Listed Enterprise"},
+    "India – Startups": {"gl": "in", "class": "Startup"},
+    "India – Top Priced Companies": {"gl": "in", "class": "Listed Enterprise"},
 }
 
+STARTUP_KEYWORDS = [
+    "startup", "venture", "seed", "series", "early stage",
+    "privately held", "bootstrapped"
+]
+
 ROLES_BY_SERVICE = {
-    "Hiring": ["HR Manager", "Head of Talent", "Chief People Officer"],
-    "Customer Support": ["Head of Operations", "Support Director"],
-    "Sourcing": ["Procurement Head", "VP Procurement"]
+    "Hiring": ["HR Manager", "Head of Talent"],
+    "Customer Support": ["Head of Operations"],
+    "Sourcing": ["Procurement Head"]
 }
 
 # =====================================================
@@ -79,33 +48,11 @@ ROLES_BY_SERVICE = {
 
 with st.sidebar:
     st.header("⚙️ Configuration")
-
-    mode = st.radio(
-        "Select Mode:",
-        ["🌐 Real Google Search", "🛠️ Simulation (Test UI)"],
-        index=0
-    )
+    mode = st.radio("Mode", ["🌐 Real Google Search", "🛠️ Simulation"], index=0)
 
     if mode == "🌐 Real Google Search":
-        st.divider()
-        st.markdown("### 🔑 API Credentials")
-
-        sec_api = st.secrets.get("GOOGLE_API_KEY")
-        sec_cx = st.secrets.get("SEARCH_ENGINE_ID")
-
-        if sec_api and sec_cx:
-            st.success("Credentials loaded from Secrets")
-            API_KEY = sec_api
-            CX_ID = sec_cx
-        else:
-            API_KEY = st.text_input("Google API Key", type="password")
-            CX_ID = st.text_input("Search Engine ID (cx)")
-
-    st.divider()
-    st.info(
-        "Hunter Mode enabled: If phone number is hidden, "
-        "the tool saves the contact page link instead of discarding the lead."
-    )
+        API_KEY = st.secrets.get("GOOGLE_API_KEY")
+        CX_ID = st.secrets.get("SEARCH_ENGINE_ID")
 
 # =====================================================
 # UTILITIES
@@ -118,33 +65,46 @@ def normalize_phone(phone):
     phone = re.sub(r"[^\d+]", "", phone)
     return phone if len(phone) >= 8 else "Visit Website"
 
-def company_matches_target(company_name, signals):
+# =====================================================
+# MARKET CAP VALIDATION (YAHOO FINANCE)
+# =====================================================
+
+def get_market_cap(company):
+    try:
+        url = "https://query1.finance.yahoo.com/v1/finance/search"
+        params = {"q": company, "quotesCount": 1, "newsCount": 0}
+        res = requests.get(url, params=params, timeout=5)
+        data = res.json()
+
+        if not data.get("quotes"):
+            return None
+
+        quote = data["quotes"][0]
+        market_cap = quote.get("marketCap")
+        symbol = quote.get("symbol")
+
+        return market_cap, symbol
+    except Exception:
+        return None
+
+# =====================================================
+# STARTUP VERIFICATION (CRUNCHBASE-STYLE)
+# =====================================================
+
+def is_startup(company_name, snippet):
     name = company_name.lower()
-    return any(sig.lower() in name for sig in signals)
+    text = snippet.lower()
+
+    if any(k in text for k in STARTUP_KEYWORDS):
+        return True
+
+    if any(s in name for s in ["pvt", "private", "llp"]):
+        return True
+
+    return False
 
 # =====================================================
-# SIMULATION MODE
-# =====================================================
-
-def get_simulation_data(region_key, count):
-    rate_limit()
-    cfg = REGION_MAP[region_key]
-
-    data = []
-    for _ in range(count):
-        data.append({
-            "Company": f"Simulated {region_key.split()[0]} Corp {random.randint(100,999)}",
-            "Location": cfg["gl"].upper(),
-            "Decision Maker": random.choice(sum(ROLES_BY_SERVICE.values(), [])),
-            "Phone": "+1-800-555-1234",
-            "Source Link": "https://www.example.com",
-            "Company Class": cfg["class"],
-            "Lead Type": "SIMULATED"
-        })
-    return data
-
-# =====================================================
-# GOOGLE SEARCH (COUNTRY ENFORCED)
+# GOOGLE SEARCH
 # =====================================================
 
 def search_google(query, api_key, cx, gl):
@@ -158,176 +118,131 @@ def search_google(query, api_key, cx, gl):
         "hl": "en"
     }
 
-    try:
-        res = requests.get(url, params=params)
-        data = res.json()
+    res = requests.get(url, params=params)
+    data = res.json()
 
-        if "error" in data:
-            return f"API_ERROR: {data['error']['message']}"
+    if "items" not in data:
+        return None
 
-        if "items" not in data:
-            return None
+    blocks = []
+    for item in data["items"]:
+        blocks.append(
+            f"Company: {item['title']}\n"
+            f"Snippet: {item.get('snippet','')}\n"
+            f"URL: {item['link']}"
+        )
 
-        results = []
-        for item in data["items"]:
-            results.append(
-                f"Source: {item['title']}\n"
-                f"Snippet: {item.get('snippet','')}\n"
-                f"URL: {item['link']}"
-            )
-
-        rate_limit()
-        return "\n".join(results)
-
-    except Exception as e:
-        return f"API_ERROR: {str(e)}"
+    rate_limit()
+    return blocks
 
 # =====================================================
-# AI + HUNTER EXTRACTION
+# EXTRACTION + VALIDATION
 # =====================================================
 
-def extract_leads(context, region_key, service, api_key, count):
+def process_results(results, region_key, service, count):
     cfg = REGION_MAP[region_key]
-
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-pro")
-
-    prompt = f"""
-You are a professional data extractor.
-
-OUTPUT FORMAT:
-Company Name | Phone Number | Decision Maker Role | Source Link
-
-RULES:
-- Do NOT invent phone numbers.
-- If missing, write exactly: Visit Website
-- Target ONLY {cfg["class"]} companies in {cfg["gl"].upper()}.
-- Base role on service: {service}
-
-INPUT:
-{context}
-"""
-
     leads = []
 
-    # ---------- AI PASS ----------
-    try:
-        response = model.generate_content(prompt)
-        raw = response.text.strip()
+    for block in results:
+        lines = block.split("\n")
+        company = lines[0].replace("Company:", "").strip()
+        snippet = lines[1]
+        url = lines[2].replace("URL:", "").strip()
 
-        for line in raw.split("\n"):
-            parts = [p.strip() for p in line.split("|")]
-            if len(parts) >= 3:
-                if not company_matches_target(parts[0], cfg["signals"]):
-                    continue
+        phone_matches = re.findall(r'(\+?\d[\d \-]{8,15})', block)
+        phone = normalize_phone(phone_matches[0]) if phone_matches else "Visit Website"
 
-                phone = normalize_phone(parts[1])
+        # ---------- STARTUP MODE ----------
+        if cfg["class"] == "Startup":
+            if not is_startup(company, snippet):
+                continue
 
-                leads.append({
-                    "Company": parts[0],
-                    "Phone": phone,
-                    "Decision Maker": parts[2],
-                    "Source Link": parts[3] if len(parts) > 3 else "N/A",
-                    "Location": cfg["gl"].upper(),
-                    "Company Class": cfg["class"],
-                    "Lead Type": "Phone Verified" if phone != "Visit Website" else "Link Only"
-                })
+            leads.append({
+                "Company": company,
+                "Phone": phone,
+                "Decision Maker": random.choice(ROLES_BY_SERVICE[service]),
+                "Source Link": url,
+                "Company Stage": "Startup",
+                "Market Cap (USD)": "Private",
+                "Validation Source": "Heuristic",
+                "Lead Confidence": "High" if phone != "Visit Website" else "Medium"
+            })
 
-    except Exception as e:
-        logging.warning(f"AI extraction failed: {e}")
+        # ---------- LISTED MODE ----------
+        else:
+            market_data = get_market_cap(company)
+            if not market_data:
+                continue
 
-    # ---------- REGEX FALLBACK ----------
-    if not leads:
-        current_company = "Unknown Company"
-        current_link = "N/A"
+            market_cap, symbol = market_data
+            if not market_cap or market_cap < MIN_MARKET_CAP:
+                continue
 
-        for line in context.split("\n"):
-            if line.startswith("Source:"):
-                current_company = line.replace("Source:", "").strip()
-            elif line.startswith("URL:"):
-                current_link = line.replace("URL:", "").strip()
-            elif "Snippet:" in line:
-                if not company_matches_target(current_company, cfg["signals"]):
-                    continue
+            leads.append({
+                "Company": company,
+                "Phone": phone,
+                "Decision Maker": random.choice(ROLES_BY_SERVICE[service]),
+                "Source Link": url,
+                "Company Stage": "Listed Enterprise",
+                "Market Cap (USD)": market_cap,
+                "Validation Source": f"Yahoo Finance ({symbol})",
+                "Lead Confidence": "High" if phone != "Visit Website" else "Medium"
+            })
 
-                phones = re.findall(r'(\+?\d[\d \-]{8,15})', line)
-                phone = normalize_phone(phones[0]) if phones else "Visit Website"
+        if len(leads) >= count:
+            break
 
-                leads.append({
-                    "Company": current_company,
-                    "Phone": phone,
-                    "Decision Maker": random.choice(ROLES_BY_SERVICE[service]),
-                    "Source Link": current_link,
-                    "Location": cfg["gl"].upper(),
-                    "Company Class": cfg["class"],
-                    "Lead Type": "Phone Verified" if phone != "Visit Website" else "Link Only"
-                })
-
-    df = pd.DataFrame(leads)
-    if not df.empty:
-        df.drop_duplicates(subset=["Company"], inplace=True)
-        return df.head(count).to_dict(orient="records")
-
-    return []
+    return leads
 
 # =====================================================
-# MAIN UI
+# UI
 # =====================================================
 
-st.title("🛡️ BPO LeadGen Pro")
-st.caption("Publicly sourced business contact intelligence. GDPR compliant.")
+st.title("🛡️ BPO LeadGen Pro – Intelligence Edition")
+st.caption("Startup & Market-Cap validated business leads")
 
 c1, c2, c3 = st.columns(3)
 with c1:
-    region_key = st.selectbox(
-        "Target Market (Country + Company Type)",
-        REGION_MAP.keys()
-    )
+    region_key = st.selectbox("Target Market", REGION_MAP.keys())
 with c2:
     service = st.selectbox("Service Pitch", ROLES_BY_SERVICE.keys())
 with c3:
     count = st.slider("Lead Count", 5, 10, 5)
 
 # =====================================================
-# ACTION
+# RUN
 # =====================================================
 
 if st.button("🚀 Generate Leads", type="primary"):
 
-    if mode == "🛠️ Simulation (Test UI)":
-        leads = get_simulation_data(region_key, count)
-        df = pd.DataFrame(leads)
+    if mode == "🛠️ Simulation":
+        st.info("Simulation mode active.")
+        st.stop()
 
-    else:
-        if not API_KEY or not CX_ID:
-            st.error("Missing API credentials.")
+    if not API_KEY or not CX_ID:
+        st.error("Missing API credentials.")
+        st.stop()
+
+    query = f"{region_key.split('–')[0]} company headquarters contact {service}"
+    st.write(f"Debug Query: `{query}`")
+
+    with st.status("🔍 Validating company intelligence...", expanded=True):
+        results = search_google(query, API_KEY, CX_ID, REGION_MAP[region_key]["gl"])
+
+        if not results:
+            st.error("No results found.")
             st.stop()
 
-        cfg = REGION_MAP[region_key]
-        query = f"{cfg['query']} {service}"
-        st.write(f"Debug Query: `{query}`")
+        leads = process_results(results, region_key, service, count)
+        df = pd.DataFrame(leads)
 
-        with st.status("🔍 Hunting qualified leads...", expanded=True):
-            context = search_google(query, API_KEY, CX_ID, cfg["gl"])
-
-            if not context or "API_ERROR" in str(context):
-                st.error(context or "No results found.")
-                st.stop()
-
-            leads = extract_leads(context, region_key, service, API_KEY, count)
-            df = pd.DataFrame(leads)
-
-    if not df.empty:
+    if df.empty:
+        st.warning("No companies passed validation.")
+    else:
         st.dataframe(df, use_container_width=True)
 
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
             df.to_excel(writer, index=False)
 
-        st.download_button(
-            "📥 Download Excel",
-            buffer.getvalue(),
-            file_name="BPO_Qualified_Leads.xlsx"
-        )
-    else:
-        st.warning("No qualified companies matched the target criteria.")
+        st.download_button("📥 Download Excel", buffer.getvalue(), "Validated_BPO_Leads.xlsx")
