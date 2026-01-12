@@ -17,12 +17,11 @@ with st.sidebar:
     # 1. MODE SELECTION
     mode = st.radio("Select Mode:", ["🛠️ Simulation (Test UI)", "🌐 Real Google Search"], index=0)
     
-    # 2. CREDENTIALS (Only needed for Real Mode)
+    # 2. CREDENTIALS
     if mode == "🌐 Real Google Search":
         st.divider()
         st.markdown("### 🔑 API Credentials")
         
-        # Try to load from secrets first
         sec_api = st.secrets.get("GOOGLE_API_KEY")
         sec_cx = st.secrets.get("SEARCH_ENGINE_ID")
         
@@ -30,19 +29,30 @@ with st.sidebar:
             st.success("Credentials loaded from Secrets!")
             api_key = sec_api
             search_engine_id = sec_cx
+            
+            # CONNECTION CHECKER
+            if st.button("Test API Connection"):
+                try:
+                    genai.configure(api_key=api_key)
+                    # List models to see what is available
+                    models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+                    st.success(f"Connected! Available models: {len(models)}")
+                    st.json(models)
+                except Exception as e:
+                    st.error(f"Connection Failed: {e}")
         else:
             st.warning("No secrets found. Enter manually:")
             api_key = st.text_input("Google API Key", type="password")
             search_engine_id = st.text_input("Search Engine ID (cx)")
             
     st.divider()
-    st.info("💡 **Simulation:** Generates realistic dummy data to test Excel export.\n\n🌐 **Real Search:** Uses your Google API to find actual companies.")
+    st.info("💡 **Simulation:** Generates dummy data to test Excel export.\n\n🌐 **Real Search:** Uses Google API + Gemini 1.5 Flash.")
 
 # --- FUNCTIONS ---
 
 def get_simulation_data(region, count):
     """Generates fake verified leads for testing."""
-    time.sleep(1.5) # Fake loading
+    time.sleep(1.5) 
     data = []
     roles = ["Head of Operations", "Director of Talent", "Chief People Officer", "VP Procurement"]
     
@@ -73,9 +83,11 @@ def search_google_real(query, api_key, cx):
         return f"API_ERROR: {str(e)}"
 
 def extract_with_ai(context, region, service, count, api_key):
-    """Uses Gemini to parse the search results."""
+    """Uses Gemini 1.5 Flash to parse the search results."""
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-pro')
+    
+    # FIX: Explicitly using 'gemini-1.5-flash' which is the current standard
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = f"""
     Extract exactly {count} BPO leads from the text below for {region} needing {service}.
@@ -89,8 +101,9 @@ def extract_with_ai(context, region, service, count, api_key):
         response = model.generate_content(prompt)
         text = response.text.replace('```json', '').replace('```', '').strip()
         return json.loads(text)
-    except:
-        return []
+    except Exception as e:
+        # Pass the error up so we can see it in the UI
+        return f"AI_ERROR: {str(e)}"
 
 # --- MAIN APP ---
 st.title("💼 BPO LeadGen Pro")
@@ -133,11 +146,12 @@ if st.button("🚀 Generate Leads", type="primary"):
                     st.info("Check 'API Restrictions' in Google Cloud Console Credentials.")
                 
                 elif context:
-                    status.update(label="🧠 Analyzing with AI...", state="running")
+                    status.update(label="🧠 Analyzing with Gemini 1.5 Flash...", state="running")
+                    
                     # 2. AI Extract
                     leads = extract_with_ai(context, region, service, count, api_key)
                     
-                    if leads:
+                    if isinstance(leads, list) and leads:
                         status.update(label="✅ Success!", state="complete")
                         df = pd.DataFrame(leads)
                         st.dataframe(df, use_container_width=True)
@@ -146,6 +160,9 @@ if st.button("🚀 Generate Leads", type="primary"):
                         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                             df.to_excel(writer, index=False)
                         st.download_button("📥 Download Real Data", buffer.getvalue(), "Real_Leads.xlsx")
+                    elif isinstance(leads, str) and "AI_ERROR" in leads:
+                        status.update(label="⚠️ AI Model Error", state="error")
+                        st.error(leads)
                     else:
                         status.update(label="⚠️ AI could not format data", state="error")
                 else:
