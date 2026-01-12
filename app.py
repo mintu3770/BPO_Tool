@@ -44,7 +44,7 @@ with st.sidebar:
             search_engine_id = st.text_input("Search Engine ID (cx)")
             
     st.divider()
-    st.info("💡 **Tip:** This version aggressively filters out PDF reports and News articles to find real Switchboard numbers.")
+    st.info("💡 **Tip:** This version is 'Permissive'. It saves companies even if the phone number is missing (marked as 'See Link').")
 
 # --- FUNCTIONS ---
 
@@ -80,49 +80,47 @@ def search_google_real(query, api_key, cx):
     except Exception as e:
         return f"API_ERROR: {str(e)}"
 
-def extract_with_lenient_ai(context, region, service, count, api_key):
-    """Uses Gemini 1.5 Flash with LENIENT instructions to capture more leads."""
+def extract_with_permissive_ai(context, region, service, count, api_key):
+    """Uses Gemini 1.5 Flash with PERMISSIVE instructions."""
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = f"""
-    You are a Lead Generation Specialist. Analyze the Google Search Results below.
+    You are a Data Scraper. Extract every company mentioned in the text below.
     
-    GOAL: List {count} companies in {region} needing {service}.
+    GOAL: List {count} companies in {region}.
     
     RULES:
-    1. **Phone Numbers:** Extract any phone number digits found in the snippet. Look for "Switchboard", "Tel", "T:", "P:".
-    2. **Fallback:** If the snippet matches a company but has NO phone number, write "Link in Excel" in the Phone field. DO NOT discard the lead.
-    3. **Cleanup:** Remove text like "Give a missed call on" and just keep the digits if possible.
+    1. **Company Name:** Extract the name of the company (e.g., Unilever, Aberdeen).
+    2. **Phone Numbers:** If you see digits (e.g., +44, 020, 1-800), extract them.
+    3. **MISSING PHONE:** If there is NO phone number, write "See Link" in the Phone field. DO NOT SKIP THE COMPANY.
+    4. **Decision Maker:** Guess the relevant role for {service} (e.g., "HR Director", "Ops Lead").
     
     INPUT CONTEXT:
     {context}
     
     OUTPUT FORMAT (Return strictly a JSON list):
     [
-        {{"Company": "Name", "Location": "City/Region", "Decision_Maker": "Department/Role", "Phone": "Number or 'Link in Excel'", "Source_URL": "Link"}}
+        {{"Company": "Name", "Location": "Address found or Region", "Decision_Maker": "Role", "Phone": "Number or 'See Link'", "Source_URL": "Link"}}
     ]
     """
     try:
         response = model.generate_content(prompt)
         text = response.text.replace('```json', '').replace('```', '').strip()
+        # Attempt to parse
         return json.loads(text)
     except Exception as e:
         return f"AI_ERROR: {str(e)}"
 
 # --- MAIN APP ---
-st.title("🛡️ BPO LeadGen Pro (Anti-Noise Mode)")
+st.title("🛡️ BPO LeadGen Pro (Permissive Mode)")
 
-# --- FIXED MAPPING: AGGRESSIVE FILTERING ---
+# --- FIXED MAPPING: FORCE "TELEPHONE" IN SEARCH ---
 REGION_MAP = {
-    # We use "plc" (Public Limited Company) instead of "FTSE" to find the actual legal entities
-    "UK FTSE 100": "UK plc 'Registered Office' switchboard number -report -pdf -trends -recruitment",
-    
-    # We search for "Inc" and specific area codes or "Main Line"
-    "USA Startups": "USA Inc 'Corporate Headquarters' main line phone -news -articles -jobs",
-    
-    # We search for "Limited" and "Mumbai/Bangalore" to get specific HQs
-    "India NIFTY 50": "India Limited company 'Registered Office' Mumbai contact number -news -moneycontrol"
+    # We add "Telephone" OR "Tel" to force digits into the snippet
+    "UK FTSE 100": "UK plc 'Contact Us' (Telephone OR Tel) -news -jobs",
+    "USA Startups": "USA Inc 'Contact Us' (Phone OR Call) -news -jobs",
+    "India NIFTY 50": "India Limited 'Contact Us' (Tel OR Phone) -news -jobs"
 }
 
 c1, c2, c3 = st.columns(3)
@@ -153,7 +151,7 @@ if st.button("🚀 Generate Leads", type="primary"):
         else:
             with st.status("🔍 Searching Google Live...", expanded=True) as status:
                 
-                # Broad query to catch both "Phone" and "Contact" pages
+                # Query includes "Telephone" to force digits
                 query = f"{search_term} {service}"
                 
                 context = search_google_real(query, api_key, search_engine_id)
@@ -167,13 +165,13 @@ if st.button("🚀 Generate Leads", type="primary"):
                         st.text(context)
                     
                     status.update(label="🧠 Analyzing with AI...", state="running")
-                    leads = extract_with_lenient_ai(context, region_select, service, count, api_key)
+                    leads = extract_with_permissive_ai(context, region_select, service, count, api_key)
                     
                     if isinstance(leads, list) and leads:
                         status.update(label="✅ Success!", state="complete")
                         df = pd.DataFrame(leads)
                         
-                        # Filter out empty rows
+                        # Filter out obviously bad rows
                         df = df[df['Company'] != "N/A"]
                         
                         st.dataframe(df, use_container_width=True)
@@ -183,7 +181,7 @@ if st.button("🚀 Generate Leads", type="primary"):
                             df.to_excel(writer, index=False)
                         st.download_button("📥 Download Verified Data", buffer.getvalue(), "Real_Leads.xlsx")
                     else:
-                        status.update(label="⚠️ No structured data found.", state="error")
-                        st.warning("Google found results, but AI couldn't parse them. Try 'Simulation Mode'.")
+                        status.update(label="⚠️ AI Parsing Error.", state="error")
+                        st.error("AI could not extract lists. This usually happens if the search results were too messy.")
                 else:
                     status.update(label="❌ No results found", state="error")
