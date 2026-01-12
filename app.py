@@ -34,8 +34,10 @@ with st.sidebar:
             if st.button("Test API Connection"):
                 try:
                     genai.configure(api_key=api_key)
-                    models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                    st.success(f"Connected! Available models: {len(models)}")
+                    # Check specifically for gemini-pro
+                    model = genai.GenerativeModel('gemini-pro')
+                    response = model.generate_content("Hello")
+                    st.success(f"Connected to gemini-pro!")
                 except Exception as e:
                     st.error(f"Connection Failed: {e}")
         else:
@@ -44,7 +46,7 @@ with st.sidebar:
             search_engine_id = st.text_input("Search Engine ID (cx)")
             
     st.divider()
-    st.info("💡 **Tip:** This version uses a Regex Safety Net to capture phone numbers even if the AI misses them.")
+    st.info("💡 **Tip:** This version uses a Regex Safety Net. If AI fails, it manually hunts for digits in the text.")
 
 # --- FUNCTIONS ---
 
@@ -81,14 +83,15 @@ def search_google_real(query, api_key, cx):
         return f"API_ERROR: {str(e)}"
 
 def extract_with_bulletproof_ai(context, region, service, count, api_key):
-    """Uses Gemini 1.5 Flash with Simple Formatting + Regex Backup."""
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    """Hybrid Extraction: Tries AI, falls back to manual Regex if AI fails."""
     
-    # SIMPLER PROMPT: Ask for pipe-separated text, not complex JSON
+    # 1. SETUP MODEL (Switched to 'gemini-pro' to fix 404 error)
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-pro')
+    
     prompt = f"""
     Analyze the text below and list companies found.
-    Format each line strictly like this:
+    Format each line strictly like this (Pipe Separated):
     Company Name | Phone Number | Decision Maker Role | Source Link
     
     RULES:
@@ -99,25 +102,49 @@ def extract_with_bulletproof_ai(context, region, service, count, api_key):
     INPUT TEXT:
     {context}
     """
+    
+    extracted_leads = []
+    
+    # 2. TRY AI EXTRACTION
     try:
         response = model.generate_content(prompt)
         raw_text = response.text.strip()
         
-        # Parse the pipe-separated lines manually
-        leads = []
         for line in raw_text.split('\n'):
             parts = line.split('|')
             if len(parts) >= 3:
-                leads.append({
+                extracted_leads.append({
                     "Company": parts[0].strip(),
                     "Phone": parts[1].strip(),
                     "Decision_Maker": parts[2].strip(),
                     "Source_URL": parts[3].strip() if len(parts) > 3 else "N/A",
-                    "Location": region # Default location
+                    "Location": region 
                 })
-        return leads
-    except Exception as e:
-        return f"AI_ERROR: {str(e)}"
+    except Exception as ai_error:
+        print(f"AI Failed: {ai_error}") # Continue to backup
+        
+    # 3. REGEX BACKUP (If AI returned nothing or crashed)
+    if not extracted_leads:
+        # Regex to find phone-like patterns associated with text
+        # Looks for patterns like +44, 020, 1-800 followed by digits
+        lines = context.split('\n')
+        for line in lines:
+            if "Source:" in line:
+                current_company = line.replace("Source:", "").strip()
+            elif "Snippet:" in line or "Text:" in line:
+                # Look for phone numbers in the text manually
+                phones = re.findall(r'(\+?\d[\d -]{8,15})', line)
+                if phones:
+                    # Found a number manually!
+                    extracted_leads.append({
+                        "Company": current_company if 'current_company' in locals() else "Unknown",
+                        "Phone": phones[0],
+                        "Decision_Maker": "N/A",
+                        "Source_URL": "See Search Results",
+                        "Location": region
+                    })
+
+    return extracted_leads
 
 # --- MAIN APP ---
 st.title("🛡️ BPO LeadGen Pro (Bulletproof Mode)")
@@ -168,20 +195,16 @@ if st.button("🚀 Generate Leads", type="primary"):
                     with st.expander("👀 View Raw Google Results", expanded=False):
                         st.text(context)
                     
-                    status.update(label="🧠 Analyzing with AI...", state="running")
+                    status.update(label="🧠 Analyzing with AI (Backup: Regex)...", state="running")
                     
-                    # 1. Try AI Extraction
+                    # 1. Run Hybrid Extraction
                     leads = extract_with_bulletproof_ai(context, region_select, service, count, api_key)
                     
-                    # 2. Safety Check: If AI failed completely, return an error
-                    if isinstance(leads, str) and "AI_ERROR" in leads:
-                        status.update(label="⚠️ AI Error", state="error")
-                        st.error(leads)
-                    elif isinstance(leads, list) and leads:
+                    if leads:
                         status.update(label="✅ Success!", state="complete")
                         df = pd.DataFrame(leads)
                         
-                        # Filter bad rows
+                        # Filter bad rows (headers)
                         df = df[df['Company'] != "Company Name"] 
                         
                         st.dataframe(df, use_container_width=True)
@@ -191,7 +214,7 @@ if st.button("🚀 Generate Leads", type="primary"):
                             df.to_excel(writer, index=False)
                         st.download_button("📥 Download Verified Data", buffer.getvalue(), "Real_Leads.xlsx")
                     else:
-                        status.update(label="⚠️ Parsing Failed.", state="error")
-                        st.error("The AI read the data but couldn't format it. Try searching a different region.")
+                        status.update(label="⚠️ Extraction Failed.", state="error")
+                        st.error("Neither AI nor Regex found valid data in these search results.")
                 else:
                     status.update(label="❌ No results found", state="error")
