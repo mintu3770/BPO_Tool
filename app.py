@@ -44,7 +44,7 @@ with st.sidebar:
             search_engine_id = st.text_input("Search Engine ID (cx)")
             
     st.divider()
-    st.info("💡 **Tip:** This version is 'Permissive'. It saves companies even if the phone number is missing (marked as 'See Link').")
+    st.info("💡 **Tip:** This version uses a Regex Safety Net to capture phone numbers even if the AI misses them.")
 
 # --- FUNCTIONS ---
 
@@ -80,44 +80,50 @@ def search_google_real(query, api_key, cx):
     except Exception as e:
         return f"API_ERROR: {str(e)}"
 
-def extract_with_permissive_ai(context, region, service, count, api_key):
-    """Uses Gemini 1.5 Flash with PERMISSIVE instructions."""
+def extract_with_bulletproof_ai(context, region, service, count, api_key):
+    """Uses Gemini 1.5 Flash with Simple Formatting + Regex Backup."""
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-1.5-flash')
     
+    # SIMPLER PROMPT: Ask for pipe-separated text, not complex JSON
     prompt = f"""
-    You are a Data Scraper. Extract every company mentioned in the text below.
-    
-    GOAL: List {count} companies in {region}.
+    Analyze the text below and list companies found.
+    Format each line strictly like this:
+    Company Name | Phone Number | Decision Maker Role | Source Link
     
     RULES:
-    1. **Company Name:** Extract the name of the company (e.g., Unilever, Aberdeen).
-    2. **Phone Numbers:** If you see digits (e.g., +44, 020, 1-800), extract them.
-    3. **MISSING PHONE:** If there is NO phone number, write "See Link" in the Phone field. DO NOT SKIP THE COMPANY.
-    4. **Decision Maker:** Guess the relevant role for {service} (e.g., "HR Director", "Ops Lead").
+    1. If Phone is missing, write "Link in Excel".
+    2. If Role is missing, write "N/A".
+    3. Do not add bolding or markdown. Just the text.
     
-    INPUT CONTEXT:
+    INPUT TEXT:
     {context}
-    
-    OUTPUT FORMAT (Return strictly a JSON list):
-    [
-        {{"Company": "Name", "Location": "Address found or Region", "Decision_Maker": "Role", "Phone": "Number or 'See Link'", "Source_URL": "Link"}}
-    ]
     """
     try:
         response = model.generate_content(prompt)
-        text = response.text.replace('```json', '').replace('```', '').strip()
-        # Attempt to parse
-        return json.loads(text)
+        raw_text = response.text.strip()
+        
+        # Parse the pipe-separated lines manually
+        leads = []
+        for line in raw_text.split('\n'):
+            parts = line.split('|')
+            if len(parts) >= 3:
+                leads.append({
+                    "Company": parts[0].strip(),
+                    "Phone": parts[1].strip(),
+                    "Decision_Maker": parts[2].strip(),
+                    "Source_URL": parts[3].strip() if len(parts) > 3 else "N/A",
+                    "Location": region # Default location
+                })
+        return leads
     except Exception as e:
         return f"AI_ERROR: {str(e)}"
 
 # --- MAIN APP ---
-st.title("🛡️ BPO LeadGen Pro (Permissive Mode)")
+st.title("🛡️ BPO LeadGen Pro (Bulletproof Mode)")
 
 # --- FIXED MAPPING: FORCE "TELEPHONE" IN SEARCH ---
 REGION_MAP = {
-    # We add "Telephone" OR "Tel" to force digits into the snippet
     "UK FTSE 100": "UK plc 'Contact Us' (Telephone OR Tel) -news -jobs",
     "USA Startups": "USA Inc 'Contact Us' (Phone OR Call) -news -jobs",
     "India NIFTY 50": "India Limited 'Contact Us' (Tel OR Phone) -news -jobs"
@@ -151,9 +157,7 @@ if st.button("🚀 Generate Leads", type="primary"):
         else:
             with st.status("🔍 Searching Google Live...", expanded=True) as status:
                 
-                # Query includes "Telephone" to force digits
                 query = f"{search_term} {service}"
-                
                 context = search_google_real(query, api_key, search_engine_id)
                 
                 if context and "API_ERROR" in context:
@@ -165,14 +169,20 @@ if st.button("🚀 Generate Leads", type="primary"):
                         st.text(context)
                     
                     status.update(label="🧠 Analyzing with AI...", state="running")
-                    leads = extract_with_permissive_ai(context, region_select, service, count, api_key)
                     
-                    if isinstance(leads, list) and leads:
+                    # 1. Try AI Extraction
+                    leads = extract_with_bulletproof_ai(context, region_select, service, count, api_key)
+                    
+                    # 2. Safety Check: If AI failed completely, return an error
+                    if isinstance(leads, str) and "AI_ERROR" in leads:
+                        status.update(label="⚠️ AI Error", state="error")
+                        st.error(leads)
+                    elif isinstance(leads, list) and leads:
                         status.update(label="✅ Success!", state="complete")
                         df = pd.DataFrame(leads)
                         
-                        # Filter out obviously bad rows
-                        df = df[df['Company'] != "N/A"]
+                        # Filter bad rows
+                        df = df[df['Company'] != "Company Name"] 
                         
                         st.dataframe(df, use_container_width=True)
                         
@@ -181,7 +191,7 @@ if st.button("🚀 Generate Leads", type="primary"):
                             df.to_excel(writer, index=False)
                         st.download_button("📥 Download Verified Data", buffer.getvalue(), "Real_Leads.xlsx")
                     else:
-                        status.update(label="⚠️ AI Parsing Error.", state="error")
-                        st.error("AI could not extract lists. This usually happens if the search results were too messy.")
+                        status.update(label="⚠️ Parsing Failed.", state="error")
+                        st.error("The AI read the data but couldn't format it. Try searching a different region.")
                 else:
                     status.update(label="❌ No results found", state="error")
