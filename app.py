@@ -45,7 +45,7 @@ with st.sidebar:
             search_engine_id = st.text_input("Search Engine ID (cx)")
             
     st.divider()
-    st.info("💡 **Directory Hack:** This version searches Bloomberg/Reuters profiles which often show the phone number in the snippet!")
+    st.info("💡 **Hunter Mode:** Scans for 'Contact Us' pages. If no phone number is found in the preview, it provides the direct link.")
 
 # --- FUNCTIONS ---
 
@@ -81,23 +81,24 @@ def search_google_real(query, api_key, cx):
     except Exception as e:
         return f"API_ERROR: {str(e)}"
 
-def extract_with_bulletproof_ai(context, region, service, count, api_key):
-    """Hybrid Extraction: Tries AI, falls back to manual Regex if AI fails."""
+def extract_with_hunter_ai(context, region, service, count, api_key):
+    """Hybrid Extraction: Matches Companies + Phones, with fallbacks."""
     
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-pro')
     
     prompt = f"""
-    Analyze the text below. It contains business directory profiles.
-    Extract the Company Name and Phone Number from each snippet.
+    You are a Data Scraper. Analyze the search results below.
     
-    Format each line strictly like this (Pipe Separated):
+    GOAL: Create a list of companies found in the text.
+    
+    OUTPUT FORMAT (Pipe Separated):
     Company Name | Phone Number | Decision Maker Role | Source Link
     
     RULES:
-    1. Phone numbers usually look like "+1...", "+44...", "020...". Extract them exactly.
-    2. If Phone is missing, write "Link in Excel".
-    3. Decision Maker: Guess the role based on "{service}" (e.g. "HR Director" or "Ops Manager").
+    1. **Company Name:** Extract the name (e.g. AstraZeneca, Barclays).
+    2. **Phone:** Look for digits. If NONE found, write "Visit Website".
+    3. **Role:** Guess the role based on "{service}" (e.g. "HR Manager" or "Head of Ops").
     
     INPUT TEXT:
     {context}
@@ -105,7 +106,7 @@ def extract_with_bulletproof_ai(context, region, service, count, api_key):
     
     extracted_leads = []
     
-    # 2. TRY AI EXTRACTION
+    # 1. TRY AI EXTRACTION
     try:
         response = model.generate_content(prompt)
         raw_text = response.text.strip()
@@ -123,39 +124,43 @@ def extract_with_bulletproof_ai(context, region, service, count, api_key):
     except Exception as ai_error:
         print(f"AI Failed: {ai_error}") 
         
-    # 3. REGEX BACKUP (If AI returned nothing)
+    # 2. FAILSAFE: If AI found nothing, manually parse the text lines
     if not extracted_leads:
         lines = context.split('\n')
-        current_company = "Unknown"
+        current_company = "Unknown Company"
+        current_link = "N/A"
+        
         for line in lines:
             if "Source:" in line:
-                current_company = line.replace("Source:", "").replace("Profile", "").strip()
-            elif "Snippet:" in line or "Text:" in line:
-                # Regex for Intl formats (UK, US, India)
-                phones = re.findall(r'(\+?\d[\d \-\(\)]{8,16})', line)
-                if phones:
-                    # Filter out short dates/years that look like phones
-                    valid_phones = [p for p in phones if len(re.sub(r'\D', '', p)) > 8]
-                    if valid_phones:
-                        extracted_leads.append({
-                            "Company": current_company,
-                            "Phone": valid_phones[0],
-                            "Decision_Maker": "N/A",
-                            "Source_URL": "See Search Results",
-                            "Location": region
-                        })
+                current_company = line.replace("Source:", "").replace("Contact", "").strip()
+            elif "URL:" in line:
+                current_link = line.replace("URL:", "").strip()
+            elif "Snippet:" in line:
+                # Basic Regex for phones
+                phones = re.findall(r'(\+?\d[\d \-]{8,15})', line)
+                phone_val = phones[0] if phones else "Visit Website"
+                
+                # Add to list
+                extracted_leads.append({
+                    "Company": current_company,
+                    "Phone": phone_val,
+                    "Decision_Maker": "N/A",
+                    "Source_URL": current_link,
+                    "Location": region
+                })
 
     return extracted_leads
 
 # --- MAIN APP ---
-st.title("🛡️ BPO LeadGen Pro (Directory Mode)")
+st.title("🛡️ BPO LeadGen Pro (Hunter Mode)")
 
-# --- NEW STRATEGY: TARGET BLOOMBERG/REUTERS ---
-# This forces Google to look at profiles that LIST phone numbers in plain text.
+# --- FIXED MAPPING: BROAD BUT SPECIFIC ---
 REGION_MAP = {
-    "UK FTSE 100": "site:bloomberg.com/profile 'United Kingdom' 'Phone' OR 'Tel' -news",
-    "USA Startups": "site:bloomberg.com/profile 'United States' 'Phone' OR 'Tel' -news",
-    "India NIFTY 50": "site:moneycontrol.com OR site:bloomberg.com/profile 'India' 'Phone' -news"
+    # We remove "site:" restrictions to ensure RESULTS appear.
+    # We add "Contact" and "Phone" to prioritize snippets with numbers.
+    "UK FTSE 100": "UK plc corporate office 'Contact' phone number -news",
+    "USA Startups": "USA Inc headquarters 'Contact Us' phone -news",
+    "India NIFTY 50": "India Limited company corporate office contact number -news"
 }
 
 c1, c2, c3 = st.columns(3)
@@ -184,10 +189,13 @@ if st.button("🚀 Generate Leads", type="primary"):
         if not api_key or not search_engine_id:
             st.error("❌ Missing Credentials")
         else:
-            with st.status("🔍 Searching Business Directories...", expanded=True) as status:
+            with st.status("🔍 Hunting for Leads...", expanded=True) as status:
                 
-                # We specifically hunt for the "Phone" keyword in the profile snippet
                 query = f"{search_term} {service}"
+                
+                # DEBUG: Show query so we know what's happening
+                st.write(f"**Debug Query:** `{query}`")
+                
                 context = search_google_real(query, api_key, search_engine_id)
                 
                 if context and "API_ERROR" in context:
@@ -198,16 +206,16 @@ if st.button("🚀 Generate Leads", type="primary"):
                     with st.expander("👀 View Raw Google Results", expanded=False):
                         st.text(context)
                     
-                    status.update(label="🧠 Analyzing with AI...", state="running")
+                    status.update(label="🧠 Extracting Data...", state="running")
                     
-                    leads = extract_with_bulletproof_ai(context, region_select, service, count, api_key)
+                    leads = extract_with_hunter_ai(context, region_select, service, count, api_key)
                     
                     if leads:
                         status.update(label="✅ Success!", state="complete")
                         df = pd.DataFrame(leads)
                         
-                        # Filter bad rows
-                        df = df[df['Company'].str.len() < 50] 
+                        # Filter out bad header rows
+                        df = df[df['Company'] != "Company Name"]
                         
                         st.dataframe(df, use_container_width=True)
                         
@@ -217,6 +225,7 @@ if st.button("🚀 Generate Leads", type="primary"):
                         st.download_button("📥 Download Verified Data", buffer.getvalue(), "Real_Leads.xlsx")
                     else:
                         status.update(label="⚠️ Extraction Failed.", state="error")
-                        st.error("Could not find phone numbers. Directories might be blocking the snippets.")
+                        st.error("Google found data, but the extractor missed it. Check the 'Raw Results' above.")
                 else:
                     status.update(label="❌ No results found", state="error")
+                    st.error("Google returned 0 results. Try a different Region.")
