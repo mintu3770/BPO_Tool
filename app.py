@@ -1,6 +1,6 @@
 # =====================================================
-# BPO LeadGen Pro – FINAL PATCH
-# Country + Company-Type Search Enforcement
+# BPO LeadGen Pro – FINAL CLEAN DATA VERSION
+# Aggregator-Free | Company Websites Only
 # =====================================================
 
 import streamlit as st
@@ -25,7 +25,20 @@ st.set_page_config(
 logging.basicConfig(level=logging.INFO)
 
 # =====================================================
-# REGION + COMPANY TYPE (SEARCH-LEVEL ENFORCEMENT)
+# AGGREGATOR BLOCK LIST (CRITICAL)
+# =====================================================
+
+BLOCKED_DOMAINS = [
+    "linkedin.com", "indeed.com", "glassdoor.com", "crunchbase.com",
+    "angel.co", "startupindia.gov.in", "naukri.com", "monster.com",
+    "ambitionbox.com", "owler.com", "zoominfo.com", "apollo.io",
+    "yelp.com", "facebook.com", "twitter.com", "instagram.com"
+]
+
+BLOCK_SITES_QUERY = " ".join([f"-site:{d}" for d in BLOCKED_DOMAINS])
+
+# =====================================================
+# REGION + COMPANY TYPE (SEARCH-LEVEL CONTROL)
 # =====================================================
 
 REGION_MAP = {
@@ -33,16 +46,18 @@ REGION_MAP = {
     "UK – Startups": {
         "gl": "uk",
         "query": (
-            "UK startup technology company founded "
-            "site:co.uk -plc -bank -council -nhs -gov"
+            "UK startup technology company official website contact "
+            "site:co.uk -plc -bank -council -nhs -gov "
+            f"{BLOCK_SITES_QUERY}"
         ),
         "company_type": "Startup (Growth)"
     },
     "UK – Top Companies": {
         "gl": "uk",
         "query": (
-            "FTSE 100 plc corporate headquarters contact "
-            "site:co.uk -startup"
+            "FTSE 100 plc official website corporate contact "
+            "site:co.uk -startup "
+            f"{BLOCK_SITES_QUERY}"
         ),
         "company_type": "Enterprise (Established)"
     },
@@ -51,16 +66,18 @@ REGION_MAP = {
     "USA – Startups": {
         "gl": "us",
         "query": (
-            "US startup technology company founded "
-            "-site:.gov -site:.edu -site:.mil"
+            "US startup technology company official website contact "
+            "-site:.gov -site:.edu -site:.mil "
+            f"{BLOCK_SITES_QUERY}"
         ),
         "company_type": "Startup (Growth)"
     },
     "USA – Top Companies": {
         "gl": "us",
         "query": (
-            "S&P 500 company corporate headquarters contact "
-            "-site:.gov -site:.edu -site:.mil"
+            "S&P 500 company official website corporate contact "
+            "-site:.gov -site:.edu -site:.mil "
+            f"{BLOCK_SITES_QUERY}"
         ),
         "company_type": "Enterprise (Established)"
     },
@@ -69,16 +86,18 @@ REGION_MAP = {
     "India – Startups": {
         "gl": "in",
         "query": (
-            "Indian startup technology company founded "
-            "site:.in -bank -gov -nic"
+            "Indian startup technology company official website contact "
+            "site:.in -bank -gov -nic "
+            f"{BLOCK_SITES_QUERY}"
         ),
         "company_type": "Startup (Growth)"
     },
     "India – Top Companies": {
         "gl": "in",
         "query": (
-            "NIFTY 50 listed company corporate office contact "
-            "site:.in -startup"
+            "NIFTY 50 listed company official website corporate contact "
+            "site:.in -startup "
+            f"{BLOCK_SITES_QUERY}"
         ),
         "company_type": "Enterprise (Established)"
     },
@@ -109,7 +128,7 @@ with st.sidebar:
 
     st.divider()
     st.info(
-        "Hunter Mode enabled. If a phone number is hidden, "
+        "Hunter Mode enabled. If a phone number is not visible, "
         "the direct contact page link is saved instead."
     )
 
@@ -118,7 +137,7 @@ with st.sidebar:
 # =====================================================
 
 def rate_limit():
-    time.sleep(random.uniform(0.8, 1.3))
+    time.sleep(random.uniform(0.9, 1.4))
 
 def normalize_phone(phone):
     phone = re.sub(r"[^\d+]", "", phone)
@@ -130,8 +149,8 @@ def clean_company_name(name):
     name = re.sub(r"Contact.*", "", name, flags=re.I)
     return name.strip()
 
-def is_us_government(url):
-    return any(x in url for x in [".gov", ".edu", ".mil"])
+def is_blocked_url(url):
+    return any(domain in url.lower() for domain in BLOCKED_DOMAINS)
 
 # =====================================================
 # GOOGLE SEARCH
@@ -166,7 +185,7 @@ def search_google(query, api_key, cx, gl):
     return results
 
 # =====================================================
-# EXTRACTION (SAFE & GLOBAL)
+# EXTRACTION (OFFICIAL WEBSITES ONLY)
 # =====================================================
 
 def process_results(results, region_key, service, count):
@@ -174,13 +193,14 @@ def process_results(results, region_key, service, count):
     leads = []
 
     for r in results:
-        company = clean_company_name(r["company_raw"])
-        snippet = r["snippet"]
         url = r["url"]
 
-        # Block US government entities explicitly
-        if "USA" in region_key and is_us_government(url):
+        # HARD BLOCK aggregators & social platforms
+        if is_blocked_url(url):
             continue
+
+        company = clean_company_name(r["company_raw"])
+        snippet = r["snippet"]
 
         phones = re.findall(r'(\+?\d[\d \-]{8,15})', snippet)
         phone = normalize_phone(phones[0]) if phones else "Visit Website"
@@ -204,7 +224,7 @@ def process_results(results, region_key, service, count):
 # =====================================================
 
 st.title("🛡️ BPO LeadGen Pro")
-st.caption("Country-locked, company-type enforced BPO lead intelligence")
+st.caption("Official company websites only • No directories • No job portals")
 
 c1, c2, c3 = st.columns(3)
 with c1:
@@ -233,7 +253,7 @@ if st.button("🚀 Generate Leads", type="primary"):
 
     st.write(f"**Debug Query:** `{query}`")
 
-    with st.status("🔍 Hunting qualified leads...", expanded=True):
+    with st.status("🔍 Hunting clean company leads...", expanded=True):
         results = search_google(query, API_KEY, CX_ID, cfg["gl"])
 
         if not results:
@@ -244,7 +264,7 @@ if st.button("🚀 Generate Leads", type="primary"):
         df = pd.DataFrame(leads)
 
     if df.empty:
-        st.warning("No qualified leads found.")
+        st.warning("No clean company websites found.")
     else:
         st.dataframe(df, use_container_width=True)
 
@@ -255,5 +275,5 @@ if st.button("🚀 Generate Leads", type="primary"):
         st.download_button(
             "📥 Download Excel",
             buffer.getvalue(),
-            "BPO_Qualified_Leads.xlsx"
+            "BPO_Leads_Company_Websites_Only.xlsx"
         )
