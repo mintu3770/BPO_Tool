@@ -44,7 +44,7 @@ with st.sidebar:
             search_engine_id = st.text_input("Search Engine ID (cx)")
             
     st.divider()
-    st.info("🛡️ **Strict Mode:** This version filters out scam posts and refuses to invent fake phone numbers.")
+    st.info("🛡️ **Strict Mode:** Only extracts data when specific phone numbers are visible in the search snippet.")
 
 # --- FUNCTIONS ---
 
@@ -81,7 +81,7 @@ def search_google_real(query, api_key, cx):
         return f"API_ERROR: {str(e)}"
 
 def extract_with_strict_ai(context, region, service, count, api_key):
-    """Uses Gemini 1.5 Flash with STRICT instructions to avoid hallucination."""
+    """Uses Gemini 1.5 Flash with STRICT instructions."""
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-1.5-flash')
     
@@ -90,7 +90,7 @@ def extract_with_strict_ai(context, region, service, count, api_key):
     
     STRICT RULES:
     1. **DO NOT INVENT DATA.** If a phone number or name is not explicitly written in the "Text" provided below, write "N/A".
-    2. Do not make up company names that are not in the text.
+    2. Do not make up company names.
     3. Extract exactly {count} companies if possible.
     
     INPUT TEXT FROM GOOGLE:
@@ -119,7 +119,6 @@ with c3: count = st.slider("Lead Count", 5, 10, 5)
 if st.button("🚀 Generate Leads", type="primary"):
     
     if mode == "🛠️ Simulation (Test UI)":
-        # ... Simulation Logic ...
         leads = get_simulation_data(region, count)
         df = pd.DataFrame(leads)
         st.success("Generated Simulated Data")
@@ -136,10 +135,9 @@ if st.button("🚀 Generate Leads", type="primary"):
         else:
             with st.status("🔍 Searching Google Live...", expanded=True) as status:
                 
-                # --- NEW SMARTER QUERY ---
-                # 1. '-scam -fake -jobs' filters out blog posts about scams.
-                # 2. 'corporate headquarters' targets official pages.
-                query = f"List of {region} companies {service} 'corporate headquarters' phone number contact -scam -fake -jobs"
+                # --- NEW AGGRESSIVE QUERY ---
+                # Forces Google to find pages with "Phone:" or "Tel:" in the text
+                query = f"{region} {service} company (site:contact OR site:about OR site:investors) 'Phone:' OR 'Tel:' OR 'Call us at'"
                 
                 context = search_google_real(query, api_key, search_engine_id)
                 
@@ -148,7 +146,7 @@ if st.button("🚀 Generate Leads", type="primary"):
                     st.error(context)
                 
                 elif context:
-                    # SHOW THE RAW DATA (Transparency)
+                    # SHOW THE RAW DATA
                     with st.expander("👀 View Raw Google Search Results (Verified Source)", expanded=False):
                         st.text(context)
                     
@@ -167,6 +165,6 @@ if st.button("🚀 Generate Leads", type="primary"):
                         st.download_button("📥 Download Verified Data", buffer.getvalue(), "Real_Leads.xlsx")
                     else:
                         status.update(label="⚠️ AI found no valid numbers in these results.", state="error")
-                        st.warning("The search results didn't contain clear phone numbers. Try changing the 'Target Region' or 'Service Pitch' to get different results.")
+                        st.warning("The search results didn't contain visible phone numbers. Google sometimes hides digits in snippets. Try 'Simulation Mode' to test the Excel format.")
                 else:
                     status.update(label="❌ No results found", state="error")
