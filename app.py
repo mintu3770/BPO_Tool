@@ -1,10 +1,9 @@
 # =====================================================
-# BPO LeadGen Pro – Global Safe Edition
-# No Crunchbase | No Market Cap | No Hard Validation
+# BPO LeadGen Pro – FINAL PATCH
+# Country + Company-Type Search Enforcement
 # =====================================================
 
 import streamlit as st
-import google.generativeai as genai
 import requests
 import pandas as pd
 import time
@@ -26,16 +25,63 @@ st.set_page_config(
 logging.basicConfig(level=logging.INFO)
 
 # =====================================================
-# REGION & MODE CONFIG
+# REGION + COMPANY TYPE (SEARCH-LEVEL ENFORCEMENT)
 # =====================================================
 
 REGION_MAP = {
-    "UK – Startups": {"gl": "uk", "class": "Startup (Likely)"},
-    "UK – Top Priced Companies": {"gl": "uk", "class": "Enterprise (Likely)"},
-    "USA – Startups": {"gl": "us", "class": "Startup (Likely)"},
-    "USA – Top Priced Companies": {"gl": "us", "class": "Enterprise (Likely)"},
-    "India – Startups": {"gl": "in", "class": "Startup (Likely)"},
-    "India – Top Priced Companies": {"gl": "in", "class": "Enterprise (Likely)"},
+    # ---------------- UK ----------------
+    "UK – Startups": {
+        "gl": "uk",
+        "query": (
+            "UK startup technology company founded "
+            "site:co.uk -plc -bank -council -nhs -gov"
+        ),
+        "company_type": "Startup (Growth)"
+    },
+    "UK – Top Companies": {
+        "gl": "uk",
+        "query": (
+            "FTSE 100 plc corporate headquarters contact "
+            "site:co.uk -startup"
+        ),
+        "company_type": "Enterprise (Established)"
+    },
+
+    # ---------------- USA ----------------
+    "USA – Startups": {
+        "gl": "us",
+        "query": (
+            "US startup technology company founded "
+            "-site:.gov -site:.edu -site:.mil"
+        ),
+        "company_type": "Startup (Growth)"
+    },
+    "USA – Top Companies": {
+        "gl": "us",
+        "query": (
+            "S&P 500 company corporate headquarters contact "
+            "-site:.gov -site:.edu -site:.mil"
+        ),
+        "company_type": "Enterprise (Established)"
+    },
+
+    # ---------------- INDIA ----------------
+    "India – Startups": {
+        "gl": "in",
+        "query": (
+            "Indian startup technology company founded "
+            "site:.in -bank -gov -nic"
+        ),
+        "company_type": "Startup (Growth)"
+    },
+    "India – Top Companies": {
+        "gl": "in",
+        "query": (
+            "NIFTY 50 listed company corporate office contact "
+            "site:.in -startup"
+        ),
+        "company_type": "Enterprise (Established)"
+    },
 }
 
 ROLES_BY_SERVICE = {
@@ -63,8 +109,8 @@ with st.sidebar:
 
     st.divider()
     st.info(
-        "Hunter Mode enabled: If phone number is hidden, "
-        "the tool saves the contact page link instead of discarding the lead."
+        "Hunter Mode enabled. If a phone number is hidden, "
+        "the direct contact page link is saved instead."
     )
 
 # =====================================================
@@ -72,7 +118,7 @@ with st.sidebar:
 # =====================================================
 
 def rate_limit():
-    time.sleep(random.uniform(0.8, 1.4))
+    time.sleep(random.uniform(0.8, 1.3))
 
 def normalize_phone(phone):
     phone = re.sub(r"[^\d+]", "", phone)
@@ -84,18 +130,8 @@ def clean_company_name(name):
     name = re.sub(r"Contact.*", "", name, flags=re.I)
     return name.strip()
 
-def classify_company(name, region_class):
-    """
-    Soft classification only — never blocks a company
-    """
-    name_l = name.lower()
-
-    if any(x in name_l for x in ["pvt", "private", "startup", "labs"]):
-        return "Startup (Likely)"
-    if any(x in name_l for x in ["plc", "limited", "ltd", "corp"]):
-        return "Enterprise (Likely)"
-
-    return region_class
+def is_us_government(url):
+    return any(x in url for x in [".gov", ".edu", ".mil"])
 
 # =====================================================
 # GOOGLE SEARCH
@@ -118,19 +154,19 @@ def search_google(query, api_key, cx, gl):
     if "items" not in data:
         return None
 
-    blocks = []
+    results = []
     for item in data["items"]:
-        blocks.append({
+        results.append({
             "company_raw": item["title"],
             "snippet": item.get("snippet", ""),
             "url": item["link"]
         })
 
     rate_limit()
-    return blocks
+    return results
 
 # =====================================================
-# EXTRACTION (SAFE GLOBAL LOGIC)
+# EXTRACTION (SAFE & GLOBAL)
 # =====================================================
 
 def process_results(results, region_key, service, count):
@@ -138,22 +174,23 @@ def process_results(results, region_key, service, count):
     leads = []
 
     for r in results:
-        company_raw = r["company_raw"]
-        company = clean_company_name(company_raw)
+        company = clean_company_name(r["company_raw"])
         snippet = r["snippet"]
         url = r["url"]
 
-        phone_matches = re.findall(r'(\+?\d[\d \-]{8,15})', snippet)
-        phone = normalize_phone(phone_matches[0]) if phone_matches else "Visit Website"
+        # Block US government entities explicitly
+        if "USA" in region_key and is_us_government(url):
+            continue
 
-        company_class = classify_company(company, cfg["class"])
+        phones = re.findall(r'(\+?\d[\d \-]{8,15})', snippet)
+        phone = normalize_phone(phones[0]) if phones else "Visit Website"
 
         leads.append({
             "Company": company,
             "Decision Maker": random.choice(ROLES_BY_SERVICE[service]),
             "Phone": phone,
             "Source Link": url,
-            "Company Type": company_class,
+            "Company Type": cfg["company_type"],
             "Lead Type": "Phone Verified" if phone != "Visit Website" else "Link Only"
         })
 
@@ -167,7 +204,7 @@ def process_results(results, region_key, service, count):
 # =====================================================
 
 st.title("🛡️ BPO LeadGen Pro")
-st.caption("Global BPO lead intelligence — no restrictive validation")
+st.caption("Country-locked, company-type enforced BPO lead intelligence")
 
 c1, c2, c3 = st.columns(3)
 with c1:
@@ -191,11 +228,13 @@ if st.button("🚀 Generate Leads", type="primary"):
         st.error("Missing API credentials.")
         st.stop()
 
-    query = f"{region_key.split('–')[0]} company headquarters contact {service}"
-    st.write(f"Debug Query: `{query}`")
+    cfg = REGION_MAP[region_key]
+    query = f"{cfg['query']} {service}"
 
-    with st.status("🔍 Hunting leads...", expanded=True):
-        results = search_google(query, API_KEY, CX_ID, REGION_MAP[region_key]["gl"])
+    st.write(f"**Debug Query:** `{query}`")
+
+    with st.status("🔍 Hunting qualified leads...", expanded=True):
+        results = search_google(query, API_KEY, CX_ID, cfg["gl"])
 
         if not results:
             st.error("No results found.")
@@ -205,7 +244,7 @@ if st.button("🚀 Generate Leads", type="primary"):
         df = pd.DataFrame(leads)
 
     if df.empty:
-        st.warning("No leads extracted.")
+        st.warning("No qualified leads found.")
     else:
         st.dataframe(df, use_container_width=True)
 
@@ -216,5 +255,5 @@ if st.button("🚀 Generate Leads", type="primary"):
         st.download_button(
             "📥 Download Excel",
             buffer.getvalue(),
-            "BPO_Leads_Global.xlsx"
+            "BPO_Qualified_Leads.xlsx"
         )
