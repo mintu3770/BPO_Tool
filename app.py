@@ -1,6 +1,6 @@
 # =====================================================
-# BPO LeadGen Pro – Intelligence Edition (PATCHED)
-# Soft Validation + Startup Scoring + Market Cap Enrichment
+# BPO LeadGen Pro – Global Safe Edition
+# No Crunchbase | No Market Cap | No Hard Validation
 # =====================================================
 
 import streamlit as st
@@ -17,22 +17,25 @@ import logging
 # PAGE CONFIG
 # =====================================================
 
-st.set_page_config(page_title="BPO LeadGen Pro", page_icon="💼", layout="wide")
+st.set_page_config(
+    page_title="BPO LeadGen Pro",
+    page_icon="💼",
+    layout="wide"
+)
+
 logging.basicConfig(level=logging.INFO)
 
 # =====================================================
-# CONSTANTS
+# REGION & MODE CONFIG
 # =====================================================
 
-MIN_MARKET_CAP = 1_000_000_000  # $1B soft threshold
-
 REGION_MAP = {
-    "UK – Startups": {"gl": "uk", "class": "Startup"},
-    "UK – Top Priced Companies": {"gl": "uk", "class": "Listed Enterprise"},
-    "USA – Startups": {"gl": "us", "class": "Startup"},
-    "USA – Top Priced Companies": {"gl": "us", "class": "Listed Enterprise"},
-    "India – Startups": {"gl": "in", "class": "Startup"},
-    "India – Top Priced Companies": {"gl": "in", "class": "Listed Enterprise"},
+    "UK – Startups": {"gl": "uk", "class": "Startup (Likely)"},
+    "UK – Top Priced Companies": {"gl": "uk", "class": "Enterprise (Likely)"},
+    "USA – Startups": {"gl": "us", "class": "Startup (Likely)"},
+    "USA – Top Priced Companies": {"gl": "us", "class": "Enterprise (Likely)"},
+    "India – Startups": {"gl": "in", "class": "Startup (Likely)"},
+    "India – Top Priced Companies": {"gl": "in", "class": "Enterprise (Likely)"},
 }
 
 ROLES_BY_SERVICE = {
@@ -41,8 +44,6 @@ ROLES_BY_SERVICE = {
     "Sourcing": ["Procurement Head", "VP Procurement"]
 }
 
-STARTUP_KEYWORDS = ["venture", "seed", "series", "funded", "early stage"]
-
 # =====================================================
 # SIDEBAR
 # =====================================================
@@ -50,18 +51,28 @@ STARTUP_KEYWORDS = ["venture", "seed", "series", "funded", "early stage"]
 with st.sidebar:
     st.header("⚙️ Configuration")
 
-    mode = st.radio("Mode", ["🌐 Real Google Search", "🛠️ Simulation"], index=0)
+    mode = st.radio(
+        "Mode",
+        ["🌐 Real Google Search", "🛠️ Simulation (Test UI)"],
+        index=0
+    )
 
     if mode == "🌐 Real Google Search":
         API_KEY = st.secrets.get("GOOGLE_API_KEY")
         CX_ID = st.secrets.get("SEARCH_ENGINE_ID")
+
+    st.divider()
+    st.info(
+        "Hunter Mode enabled: If phone number is hidden, "
+        "the tool saves the contact page link instead of discarding the lead."
+    )
 
 # =====================================================
 # UTILITIES
 # =====================================================
 
 def rate_limit():
-    time.sleep(random.uniform(0.8, 1.5))
+    time.sleep(random.uniform(0.8, 1.4))
 
 def normalize_phone(phone):
     phone = re.sub(r"[^\d+]", "", phone)
@@ -73,39 +84,18 @@ def clean_company_name(name):
     name = re.sub(r"Contact.*", "", name, flags=re.I)
     return name.strip()
 
-def startup_score(company, snippet):
-    score = 0
-    text = (company + " " + snippet).lower()
+def classify_company(name, region_class):
+    """
+    Soft classification only — never blocks a company
+    """
+    name_l = name.lower()
 
-    if "founded" in text:
-        score += 2
-    if any(k in text for k in STARTUP_KEYWORDS):
-        score += 3
-    if any(s in company.lower() for s in ["pvt", "private", "llp"]):
-        score += 2
-    if any(y in text for y in ["2019", "2020", "2021", "2022", "2023"]):
-        score += 2
+    if any(x in name_l for x in ["pvt", "private", "startup", "labs"]):
+        return "Startup (Likely)"
+    if any(x in name_l for x in ["plc", "limited", "ltd", "corp"]):
+        return "Enterprise (Likely)"
 
-    return score
-
-# =====================================================
-# MARKET CAP (BEST-EFFORT)
-# =====================================================
-
-def get_market_cap(company):
-    try:
-        url = "https://query1.finance.yahoo.com/v1/finance/search"
-        params = {"q": company, "quotesCount": 1, "newsCount": 0}
-        res = requests.get(url, params=params, timeout=5)
-        data = res.json()
-
-        if not data.get("quotes"):
-            return None
-
-        quote = data["quotes"][0]
-        return quote.get("marketCap"), quote.get("symbol")
-    except Exception:
-        return None
+    return region_class
 
 # =====================================================
 # GOOGLE SEARCH
@@ -140,7 +130,7 @@ def search_google(query, api_key, cx, gl):
     return blocks
 
 # =====================================================
-# PROCESS + VALIDATION (PATCHED)
+# EXTRACTION (SAFE GLOBAL LOGIC)
 # =====================================================
 
 def process_results(results, region_key, service, count):
@@ -156,44 +146,16 @@ def process_results(results, region_key, service, count):
         phone_matches = re.findall(r'(\+?\d[\d \-]{8,15})', snippet)
         phone = normalize_phone(phone_matches[0]) if phone_matches else "Visit Website"
 
-        market_data = get_market_cap(company)
-        startup_points = startup_score(company, snippet)
+        company_class = classify_company(company, cfg["class"])
 
-        # ---------- STARTUP LOGIC ----------
-        if cfg["class"] == "Startup":
-            if startup_points < 3:
-                continue
-
-            leads.append({
-                "Company": company,
-                "Decision Maker": random.choice(ROLES_BY_SERVICE[service]),
-                "Phone": phone,
-                "Source Link": url,
-                "Company Stage": "Startup",
-                "Market Cap (USD)": "Private",
-                "Validation Source": "Heuristic",
-                "Lead Confidence": "High" if phone != "Visit Website" else "Medium"
-            })
-
-        # ---------- ENTERPRISE LOGIC ----------
-        else:
-            if market_data and market_data[0]:
-                market_cap, symbol = market_data
-                validation = f"Yahoo Finance ({symbol})"
-            else:
-                market_cap = "Unknown"
-                validation = "Name Heuristic"
-
-            leads.append({
-                "Company": company,
-                "Decision Maker": random.choice(ROLES_BY_SERVICE[service]),
-                "Phone": phone,
-                "Source Link": url,
-                "Company Stage": "Listed / Enterprise",
-                "Market Cap (USD)": market_cap,
-                "Validation Source": validation,
-                "Lead Confidence": "High" if phone != "Visit Website" else "Medium"
-            })
+        leads.append({
+            "Company": company,
+            "Decision Maker": random.choice(ROLES_BY_SERVICE[service]),
+            "Phone": phone,
+            "Source Link": url,
+            "Company Type": company_class,
+            "Lead Type": "Phone Verified" if phone != "Visit Website" else "Link Only"
+        })
 
         if len(leads) >= count:
             break
@@ -201,11 +163,11 @@ def process_results(results, region_key, service, count):
     return leads
 
 # =====================================================
-# UI
+# MAIN UI
 # =====================================================
 
-st.title("🛡️ BPO LeadGen Pro – Intelligence Edition")
-st.caption("Soft-validated startup & enterprise intelligence (production safe)")
+st.title("🛡️ BPO LeadGen Pro")
+st.caption("Global BPO lead intelligence — no restrictive validation")
 
 c1, c2, c3 = st.columns(3)
 with c1:
@@ -221,7 +183,7 @@ with c3:
 
 if st.button("🚀 Generate Leads", type="primary"):
 
-    if mode == "🛠️ Simulation":
+    if mode == "🛠️ Simulation (Test UI)":
         st.info("Simulation mode active.")
         st.stop()
 
@@ -232,7 +194,7 @@ if st.button("🚀 Generate Leads", type="primary"):
     query = f"{region_key.split('–')[0]} company headquarters contact {service}"
     st.write(f"Debug Query: `{query}`")
 
-    with st.status("🔍 Validating company intelligence...", expanded=True):
+    with st.status("🔍 Hunting leads...", expanded=True):
         results = search_google(query, API_KEY, CX_ID, REGION_MAP[region_key]["gl"])
 
         if not results:
@@ -243,7 +205,7 @@ if st.button("🚀 Generate Leads", type="primary"):
         df = pd.DataFrame(leads)
 
     if df.empty:
-        st.warning("No companies passed validation.")
+        st.warning("No leads extracted.")
     else:
         st.dataframe(df, use_container_width=True)
 
@@ -254,5 +216,5 @@ if st.button("🚀 Generate Leads", type="primary"):
         st.download_button(
             "📥 Download Excel",
             buffer.getvalue(),
-            "Validated_BPO_Leads.xlsx"
+            "BPO_Leads_Global.xlsx"
         )
