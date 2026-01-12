@@ -1,6 +1,5 @@
 # =====================================================
-# BPO LeadGen Pro – FINAL VERSION
-# Domain-Based Company Name Extraction (PRODUCTION SAFE)
+# BPO LeadGen Pro – HTML DISCOVERY + PHONE EXTRACTION
 # =====================================================
 
 import streamlit as st
@@ -10,7 +9,8 @@ import time
 import io
 import random
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
+from bs4 import BeautifulSoup
 
 # =====================================================
 # PAGE CONFIG
@@ -22,142 +22,119 @@ st.set_page_config(
     layout="wide"
 )
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (LeadGenBot/1.0)"
+}
+
 # =====================================================
-# HARD BLOCK LISTS (NON-NEGOTIABLE)
+# HARD BLOCK LISTS
 # =====================================================
 
 BLOCKED_DOMAIN_KEYWORDS = [
-    # Aggregators / Social
     "linkedin", "indeed", "glassdoor", "crunchbase", "angel",
     "naukri", "monster", "ambitionbox", "owler", "zoominfo",
     "apollo", "yelp", "facebook", "twitter", "instagram",
     "github", "medium", "wikipedia",
-
-    # Government
-    "gov", "nic", "ministry", "startupindia", "startuptn",
-
-    # Academia
-    "ac.in", "edu", "edu.in", "ac.uk",
-    "iit", "iim", "iisc", "university", "college",
-    "institute", "school", "academy"
-]
-
-BLOCKED_PATH_KEYWORDS = [
-    "/company", "/companies", "/profile", "/jobs", "/careers",
-    "/listing", "/directory", "/employers", "/reviews"
-]
-
-BLOCKED_ENTITY_KEYWORDS = [
-    "iit", "iim", "iisc", "university", "college",
-    "institute", "school", "academy",
-    "government", "ministry", "department", "council"
+    "gov", "nic", "startupindia", "startuptn",
+    "ac.in", "edu", "ac.uk",
+    "iit", "iim", "iisc", "university", "college", "institute"
 ]
 
 # =====================================================
-# REGION CONFIG (STRICT PRIVATE COMPANIES)
+# REGION CONFIG
 # =====================================================
 
 REGION_MAP = {
     "UK – Private Companies": {
         "gl": "uk",
-        "query": (
-            "UK private company official website services "
-            "site:co.uk -plc -bank -university -college -ac.uk -gov"
-        ),
+        "query": "UK private company official website services site:co.uk",
         "company_type": "Private Company"
     },
     "USA – Private Companies": {
         "gl": "us",
-        "query": (
-            "US private company official website services "
-            "-site:.gov -site:.edu -site:.mil -university -college"
-        ),
+        "query": "US private company official website services -site:.gov -site:.edu",
         "company_type": "Private Company"
     },
     "India – Private Companies": {
         "gl": "in",
-        "query": (
-            "Indian private company official website services "
-            "site:.in -gov -nic -ac -edu -university -college -institute"
-        ),
+        "query": "Indian private company official website services site:.in -gov -ac -edu",
         "company_type": "Private Company"
     }
 }
 
 ROLES_BY_SERVICE = {
     "Hiring": ["HR Manager", "Head of Talent"],
-    "Customer Support": ["Head of Operations"],
+    "Customer Support": ["Support Manager", "Head of Operations"],
     "Sourcing": ["Procurement Head"]
 }
 
-# =====================================================
-# SIDEBAR
-# =====================================================
-
-with st.sidebar:
-    st.header("⚙️ Configuration")
-
-    mode = st.radio(
-        "Mode",
-        ["🌐 Real Google Search", "🛠️ Simulation (Test UI)"],
-        index=0
-    )
-
-    if mode == "🌐 Real Google Search":
-        API_KEY = st.secrets.get("GOOGLE_API_KEY")
-        CX_ID = st.secrets.get("SEARCH_ENGINE_ID")
-
-    st.divider()
-    st.info(
-        "STRICT MODE\n"
-        "• Company websites only\n"
-        "• No government\n"
-        "• No academia\n"
-        "• No directories"
-    )
+SERVICE_ANCHORS = {
+    "Hiring": ["career", "job", "join", "work"],
+    "Customer Support": ["contact", "support", "help"],
+    "Sourcing": ["service", "solution", "procurement"]
+}
 
 # =====================================================
 # UTILITIES
 # =====================================================
 
 def rate_limit():
-    time.sleep(random.uniform(0.9, 1.4))
-
-def normalize_phone(phone):
-    phone = re.sub(r"[^\d+]", "", phone)
-    return phone if len(phone) >= 8 else "Visit Website"
+    time.sleep(random.uniform(1.0, 1.5))
 
 def is_blocked_domain(url):
     domain = urlparse(url).netloc.lower()
     return any(b in domain for b in BLOCKED_DOMAIN_KEYWORDS)
 
-def is_blocked_path(url):
-    path = urlparse(url).path.lower()
-    return any(p in path for p in BLOCKED_PATH_KEYWORDS)
-
-def is_blocked_entity(company, url):
-    text = (company + " " + url).lower()
-    return any(k in text for k in BLOCKED_ENTITY_KEYWORDS)
-
-# =====================================================
-# 🔑 DOMAIN-BASED COMPANY EXTRACTION (CRITICAL FIX)
-# =====================================================
+def normalize_phone(phone):
+    phone = re.sub(r"[^\d+]", "", phone)
+    if 9 <= len(phone) <= 15:
+        return phone
+    return None
 
 def extract_company_from_domain(url):
-    domain = urlparse(url).netloc.lower()
-    domain = domain.replace("www.", "")
-
-    # Remove common TLDs
-    domain = re.sub(
-        r"\.(co\.uk|com|in|org|net|io|ai|uk)$",
-        "",
-        domain
-    )
-
+    domain = urlparse(url).netloc.lower().replace("www.", "")
+    domain = re.sub(r"\.(co\.uk|com|in|org|net|io|ai|uk)$", "", domain)
     parts = re.split(r"[-\.]", domain)
-    company = " ".join(p.capitalize() for p in parts if len(p) > 2)
+    return " ".join(p.capitalize() for p in parts if len(p) > 2)
 
-    return company.strip()
+# =====================================================
+# HTML DISCOVERY
+# =====================================================
+
+def discover_internal_page(base_url, service):
+    try:
+        r = requests.get(base_url, headers=HEADERS, timeout=6)
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        for a in soup.find_all("a", href=True):
+            text = (a.get_text() or "").lower()
+            href = a["href"].lower()
+
+            for key in SERVICE_ANCHORS.get(service, []):
+                if key in text or key in href:
+                    return urljoin(base_url, a["href"])
+
+    except Exception:
+        pass
+
+    return base_url
+
+def extract_phone_numbers(url):
+    phones = set()
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=6)
+        text = r.text
+
+        matches = re.findall(r'(\+?\d[\d \-\(\)]{8,15})', text)
+        for m in matches:
+            phone = normalize_phone(m)
+            if phone:
+                phones.add(phone)
+
+    except Exception:
+        pass
+
+    return list(phones)
 
 # =====================================================
 # GOOGLE SEARCH
@@ -182,45 +159,35 @@ def search_google(query, api_key, cx, gl):
 
     results = []
     for item in data["items"]:
-        results.append({
-            "url": item["link"],
-            "snippet": item.get("snippet", "")
-        })
+        results.append(item["link"])
 
     rate_limit()
     return results
 
 # =====================================================
-# STRICT EXTRACTION PIPELINE
+# PIPELINE
 # =====================================================
 
-def process_results(results, region_key, service, count):
+def process_results(urls, region_key, service, count):
     cfg = REGION_MAP[region_key]
     leads = []
 
-    for r in results:
-        url = r["url"]
-
-        if is_blocked_domain(url):
-            continue
-        if is_blocked_path(url):
+    for base_url in urls:
+        if is_blocked_domain(base_url):
             continue
 
-        company = extract_company_from_domain(url)
+        company = extract_company_from_domain(base_url)
 
-        if is_blocked_entity(company, url):
-            continue
-        if len(company.split()) > 4:
-            continue  # safety against phrases
+        internal_page = discover_internal_page(base_url, service)
+        phones = extract_phone_numbers(internal_page)
 
-        phones = re.findall(r'(\+?\d[\d \-]{8,15})', r["snippet"])
-        phone = normalize_phone(phones[0]) if phones else "Visit Website"
+        phone = phones[0] if phones else "Visit Website"
 
         leads.append({
             "Company": company,
             "Decision Maker": random.choice(ROLES_BY_SERVICE[service]),
             "Phone": phone,
-            "Source Link": url,
+            "Source Link": internal_page,
             "Company Type": cfg["company_type"],
             "Lead Type": "Phone Verified" if phone != "Visit Website" else "Link Only"
         })
@@ -231,11 +198,11 @@ def process_results(results, region_key, service, count):
     return leads
 
 # =====================================================
-# MAIN UI
+# UI
 # =====================================================
 
-st.title("🛡️ BPO LeadGen Pro — PRIVATE COMPANY WEBSITES ONLY")
-st.caption("Domain-based company identification • Zero junk titles")
+st.title("🛡️ BPO LeadGen Pro — Smart Link Discovery + Phone Extraction")
+st.caption("Homepage → Internal Page → Phone Number")
 
 c1, c2, c3 = st.columns(3)
 with c1:
@@ -245,15 +212,10 @@ with c2:
 with c3:
     count = st.slider("Lead Count", 5, 10, 5)
 
-# =====================================================
-# RUN
-# =====================================================
-
 if st.button("🚀 Generate Leads", type="primary"):
 
-    if mode == "🛠️ Simulation (Test UI)":
-        st.info("Simulation mode active.")
-        st.stop()
+    API_KEY = st.secrets.get("GOOGLE_API_KEY")
+    CX_ID = st.secrets.get("SEARCH_ENGINE_ID")
 
     if not API_KEY or not CX_ID:
         st.error("Missing API credentials.")
@@ -264,13 +226,13 @@ if st.button("🚀 Generate Leads", type="primary"):
 
     st.write(f"**Debug Query:** `{query}`")
 
-    with st.status("🔍 Extracting company domains...", expanded=True):
-        results = search_google(query, API_KEY, CX_ID, cfg["gl"])
-        leads = process_results(results, region_key, service, count)
+    with st.status("🔍 Discovering internal pages & phone numbers...", expanded=True):
+        urls = search_google(query, API_KEY, CX_ID, cfg["gl"])
+        leads = process_results(urls, region_key, service, count)
         df = pd.DataFrame(leads)
 
     if df.empty:
-        st.warning("No valid private company websites found.")
+        st.warning("No valid leads found.")
     else:
         st.dataframe(df, use_container_width=True)
 
@@ -281,5 +243,5 @@ if st.button("🚀 Generate Leads", type="primary"):
         st.download_button(
             "📥 Download Excel",
             buffer.getvalue(),
-            "BPO_Private_Companies_Domain_Clean.xlsx"
+            "BPO_Leads_With_Phone_and_Pages.xlsx"
         )
