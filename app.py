@@ -1,6 +1,6 @@
 # =====================================================
-# BPO LeadGen Pro – FINAL HARD BLOCK PATCH
-# No Academia | No Government | Company Websites Only
+# BPO LeadGen Pro – FINAL VERSION
+# Domain-Based Company Name Extraction (PRODUCTION SAFE)
 # =====================================================
 
 import streamlit as st
@@ -26,9 +26,8 @@ st.set_page_config(
 # HARD BLOCK LISTS (NON-NEGOTIABLE)
 # =====================================================
 
-# 1️⃣ Blocked domains & TLDs
 BLOCKED_DOMAIN_KEYWORDS = [
-    # Aggregators / Social / Directories
+    # Aggregators / Social
     "linkedin", "indeed", "glassdoor", "crunchbase", "angel",
     "naukri", "monster", "ambitionbox", "owler", "zoominfo",
     "apollo", "yelp", "facebook", "twitter", "instagram",
@@ -43,54 +42,43 @@ BLOCKED_DOMAIN_KEYWORDS = [
     "institute", "school", "academy"
 ]
 
-# 2️⃣ Blocked URL path patterns
 BLOCKED_PATH_KEYWORDS = [
     "/company", "/companies", "/profile", "/jobs", "/careers",
     "/listing", "/directory", "/employers", "/reviews"
 ]
 
-# 3️⃣ Blocked entity keywords (company name + URL text)
 BLOCKED_ENTITY_KEYWORDS = [
     "iit", "iim", "iisc", "university", "college",
     "institute", "school", "academy",
-    "government", "ministry", "department", "council",
-    "authority", "mission"
+    "government", "ministry", "department", "council"
 ]
 
 # =====================================================
-# REGION CONFIG (SEARCH-LEVEL ENFORCEMENT)
+# REGION CONFIG (STRICT PRIVATE COMPANIES)
 # =====================================================
 
 REGION_MAP = {
-    # ---------------- UK ----------------
     "UK – Private Companies": {
         "gl": "uk",
         "query": (
             "UK private company official website services "
-            "site:co.uk "
-            "-plc -bank -university -college -ac.uk -gov"
+            "site:co.uk -plc -bank -university -college -ac.uk -gov"
         ),
         "company_type": "Private Company"
     },
-
-    # ---------------- USA ----------------
     "USA – Private Companies": {
         "gl": "us",
         "query": (
             "US private company official website services "
-            "-site:.gov -site:.edu -site:.mil "
-            "-university -college"
+            "-site:.gov -site:.edu -site:.mil -university -college"
         ),
         "company_type": "Private Company"
     },
-
-    # ---------------- INDIA ----------------
     "India – Private Companies": {
         "gl": "in",
         "query": (
             "Indian private company official website services "
-            "site:.in "
-            "-gov -nic -ac -edu -university -college -institute"
+            "site:.in -gov -nic -ac -edu -university -college -institute"
         ),
         "company_type": "Private Company"
     }
@@ -121,11 +109,11 @@ with st.sidebar:
 
     st.divider()
     st.info(
-        "STRICT MODE ENABLED\n\n"
-        "• No universities\n"
+        "STRICT MODE\n"
+        "• Company websites only\n"
         "• No government\n"
-        "• No aggregators\n"
-        "• Company-owned websites only"
+        "• No academia\n"
+        "• No directories"
     )
 
 # =====================================================
@@ -139,12 +127,6 @@ def normalize_phone(phone):
     phone = re.sub(r"[^\d+]", "", phone)
     return phone if len(phone) >= 8 else "Visit Website"
 
-def clean_company_name(name):
-    name = re.sub(r"\|.*", "", name)
-    name = re.sub(r"-.*", "", name)
-    name = re.sub(r"Contact.*", "", name, flags=re.I)
-    return name.strip()
-
 def is_blocked_domain(url):
     domain = urlparse(url).netloc.lower()
     return any(b in domain for b in BLOCKED_DOMAIN_KEYWORDS)
@@ -157,10 +139,25 @@ def is_blocked_entity(company, url):
     text = (company + " " + url).lower()
     return any(k in text for k in BLOCKED_ENTITY_KEYWORDS)
 
-def looks_like_company_domain(company, url):
-    domain = urlparse(url).netloc.lower().replace("www.", "")
-    tokens = re.findall(r"[a-zA-Z]{3,}", company.lower())
-    return any(t in domain for t in tokens)
+# =====================================================
+# 🔑 DOMAIN-BASED COMPANY EXTRACTION (CRITICAL FIX)
+# =====================================================
+
+def extract_company_from_domain(url):
+    domain = urlparse(url).netloc.lower()
+    domain = domain.replace("www.", "")
+
+    # Remove common TLDs
+    domain = re.sub(
+        r"\.(co\.uk|com|in|org|net|io|ai|uk)$",
+        "",
+        domain
+    )
+
+    parts = re.split(r"[-\.]", domain)
+    company = " ".join(p.capitalize() for p in parts if len(p) > 2)
+
+    return company.strip()
 
 # =====================================================
 # GOOGLE SEARCH
@@ -186,16 +183,15 @@ def search_google(query, api_key, cx, gl):
     results = []
     for item in data["items"]:
         results.append({
-            "company_raw": item["title"],
-            "snippet": item.get("snippet", ""),
-            "url": item["link"]
+            "url": item["link"],
+            "snippet": item.get("snippet", "")
         })
 
     rate_limit()
     return results
 
 # =====================================================
-# STRICT EXTRACTION (FINAL FILTER)
+# STRICT EXTRACTION PIPELINE
 # =====================================================
 
 def process_results(results, region_key, service, count):
@@ -205,18 +201,17 @@ def process_results(results, region_key, service, count):
     for r in results:
         url = r["url"]
 
-        # HARD BLOCKS
         if is_blocked_domain(url):
             continue
         if is_blocked_path(url):
             continue
 
-        company = clean_company_name(r["company_raw"])
+        company = extract_company_from_domain(url)
 
         if is_blocked_entity(company, url):
             continue
-        if not looks_like_company_domain(company, url):
-            continue
+        if len(company.split()) > 4:
+            continue  # safety against phrases
 
         phones = re.findall(r'(\+?\d[\d \-]{8,15})', r["snippet"])
         phone = normalize_phone(phones[0]) if phones else "Visit Website"
@@ -239,8 +234,8 @@ def process_results(results, region_key, service, count):
 # MAIN UI
 # =====================================================
 
-st.title("🛡️ BPO LeadGen Pro — STRICT PRIVATE COMPANIES ONLY")
-st.caption("Zero academia • Zero government • Zero aggregators")
+st.title("🛡️ BPO LeadGen Pro — PRIVATE COMPANY WEBSITES ONLY")
+st.caption("Domain-based company identification • Zero junk titles")
 
 c1, c2, c3 = st.columns(3)
 with c1:
@@ -269,16 +264,13 @@ if st.button("🚀 Generate Leads", type="primary"):
 
     st.write(f"**Debug Query:** `{query}`")
 
-    with st.status("🔍 Searching strictly private company websites...", expanded=True):
+    with st.status("🔍 Extracting company domains...", expanded=True):
         results = search_google(query, API_KEY, CX_ID, cfg["gl"])
         leads = process_results(results, region_key, service, count)
         df = pd.DataFrame(leads)
 
     if df.empty:
-        st.warning(
-            "No private companies found under strict rules.\n\n"
-            "This is expected when data purity is enforced."
-        )
+        st.warning("No valid private company websites found.")
     else:
         st.dataframe(df, use_container_width=True)
 
@@ -289,5 +281,5 @@ if st.button("🚀 Generate Leads", type="primary"):
         st.download_button(
             "📥 Download Excel",
             buffer.getvalue(),
-            "BPO_Private_Companies_Only.xlsx"
+            "BPO_Private_Companies_Domain_Clean.xlsx"
         )
