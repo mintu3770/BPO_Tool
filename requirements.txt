@@ -1,6 +1,6 @@
 streamlit
 google-generativeai
-duckduckgo-search
+requests
 pandas
 openpyxl
 xlsxwriter
