@@ -44,7 +44,7 @@ with st.sidebar:
             search_engine_id = st.text_input("Search Engine ID (cx)")
             
     st.divider()
-    st.info("🛡️ **Strict Mode:** This version will output 'N/A' instead of fake numbers if Google doesn't provide the data.")
+    st.info("🛡️ **Strict Mode:** This version filters out scam posts and refuses to invent fake phone numbers.")
 
 # --- FUNCTIONS ---
 
@@ -119,7 +119,7 @@ with c3: count = st.slider("Lead Count", 5, 10, 5)
 if st.button("🚀 Generate Leads", type="primary"):
     
     if mode == "🛠️ Simulation (Test UI)":
-        # ... Simulation Logic (Same as before) ...
+        # ... Simulation Logic ...
         leads = get_simulation_data(region, count)
         df = pd.DataFrame(leads)
         st.success("Generated Simulated Data")
@@ -135,8 +135,11 @@ if st.button("🚀 Generate Leads", type="primary"):
             st.error("❌ Missing Credentials")
         else:
             with st.status("🔍 Searching Google Live...", expanded=True) as status:
-                # Optimized Query for specific details
-                query = f"site:linkedin.com OR site:bloomberg.com {region} {service} 'headquarters' 'phone'"
+                
+                # --- NEW SMARTER QUERY ---
+                # 1. '-scam -fake -jobs' filters out blog posts about scams.
+                # 2. 'corporate headquarters' targets official pages.
+                query = f"List of {region} companies {service} 'corporate headquarters' phone number contact -scam -fake -jobs"
                 
                 context = search_google_real(query, api_key, search_engine_id)
                 
@@ -145,8 +148,8 @@ if st.button("🚀 Generate Leads", type="primary"):
                     st.error(context)
                 
                 elif context:
-                    # SHOW THE RAW DATA (Source of Truth)
-                    with st.expander("👀 View Raw Google Search Results (Check this if data seems fake)", expanded=False):
+                    # SHOW THE RAW DATA (Transparency)
+                    with st.expander("👀 View Raw Google Search Results (Verified Source)", expanded=False):
                         st.text(context)
                     
                     status.update(label="🧠 Analyzing with Strict AI...", state="running")
@@ -156,8 +159,6 @@ if st.button("🚀 Generate Leads", type="primary"):
                         status.update(label="✅ Success!", state="complete")
                         df = pd.DataFrame(leads)
                         
-                        # Highlight N/A values
-                        st.warning("⚠️ Note: If you see 'N/A', it means the data was not found in the search snippets. This is good! It means the AI is not lying.")
                         st.dataframe(df, use_container_width=True)
                         
                         buffer = io.BytesIO()
@@ -165,6 +166,7 @@ if st.button("🚀 Generate Leads", type="primary"):
                             df.to_excel(writer, index=False)
                         st.download_button("📥 Download Verified Data", buffer.getvalue(), "Real_Leads.xlsx")
                     else:
-                        status.update(label="⚠️ AI Error or No Data", state="error")
+                        status.update(label="⚠️ AI found no valid numbers in these results.", state="error")
+                        st.warning("The search results didn't contain clear phone numbers. Try changing the 'Target Region' or 'Service Pitch' to get different results.")
                 else:
                     status.update(label="❌ No results found", state="error")
