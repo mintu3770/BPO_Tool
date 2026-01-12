@@ -44,7 +44,7 @@ with st.sidebar:
             search_engine_id = st.text_input("Search Engine ID (cx)")
             
     st.divider()
-    st.info("💡 **Tip:** This version captures 'Click Link' leads if the phone number is hidden in the website.")
+    st.info("💡 **Tip:** This version aggressively filters out PDF reports and News articles to find real Switchboard numbers.")
 
 # --- FUNCTIONS ---
 
@@ -91,7 +91,7 @@ def extract_with_lenient_ai(context, region, service, count, api_key):
     GOAL: List {count} companies in {region} needing {service}.
     
     RULES:
-    1. **Phone Numbers:** Extract any phone number digits found in the snippet.
+    1. **Phone Numbers:** Extract any phone number digits found in the snippet. Look for "Switchboard", "Tel", "T:", "P:".
     2. **Fallback:** If the snippet matches a company but has NO phone number, write "Link in Excel" in the Phone field. DO NOT discard the lead.
     3. **Cleanup:** Remove text like "Give a missed call on" and just keep the digits if possible.
     
@@ -111,13 +111,18 @@ def extract_with_lenient_ai(context, region, service, count, api_key):
         return f"AI_ERROR: {str(e)}"
 
 # --- MAIN APP ---
-st.title("🛡️ BPO LeadGen Pro (Lenient Mode)")
+st.title("🛡️ BPO LeadGen Pro (Anti-Noise Mode)")
 
-# --- FIXED MAPPING: OPTIMIZED FOR CONTACT PAGES ---
+# --- FIXED MAPPING: AGGRESSIVE FILTERING ---
 REGION_MAP = {
-    "UK FTSE 100": "UK FTSE 100 'Head Office' contact number",
-    "USA Startups": "USA tech startup 'Corporate Headquarters' phone number",
-    "India NIFTY 50": "India NIFTY 50 'Customer Care' contact number"
+    # We use "plc" (Public Limited Company) instead of "FTSE" to find the actual legal entities
+    "UK FTSE 100": "UK plc 'Registered Office' switchboard number -report -pdf -trends -recruitment",
+    
+    # We search for "Inc" and specific area codes or "Main Line"
+    "USA Startups": "USA Inc 'Corporate Headquarters' main line phone -news -articles -jobs",
+    
+    # We search for "Limited" and "Mumbai/Bangalore" to get specific HQs
+    "India NIFTY 50": "India Limited company 'Registered Office' Mumbai contact number -news -moneycontrol"
 }
 
 c1, c2, c3 = st.columns(3)
@@ -149,7 +154,7 @@ if st.button("🚀 Generate Leads", type="primary"):
             with st.status("🔍 Searching Google Live...", expanded=True) as status:
                 
                 # Broad query to catch both "Phone" and "Contact" pages
-                query = f"{search_term} {service} -news -jobs"
+                query = f"{search_term} {service}"
                 
                 context = search_google_real(query, api_key, search_engine_id)
                 
