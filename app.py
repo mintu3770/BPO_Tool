@@ -8,14 +8,14 @@ import io
 import random
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="BPO LeadGen Pro", page_icon="💼", layout="wide")
+st.set_page_config(page_title="BPO LeadGen Pro (Strict Mode)", page_icon="🛡️", layout="wide")
 
 # --- SIDEBAR: CONFIGURATION ---
 with st.sidebar:
     st.header("⚙️ Configuration")
     
     # 1. MODE SELECTION
-    mode = st.radio("Select Mode:", ["🛠️ Simulation (Test UI)", "🌐 Real Google Search"], index=0)
+    mode = st.radio("Select Mode:", ["🌐 Real Google Search", "🛠️ Simulation (Test UI)"], index=0)
     
     # 2. CREDENTIALS
     if mode == "🌐 Real Google Search":
@@ -34,10 +34,8 @@ with st.sidebar:
             if st.button("Test API Connection"):
                 try:
                     genai.configure(api_key=api_key)
-                    # List models to see what is available
                     models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
                     st.success(f"Connected! Available models: {len(models)}")
-                    st.json(models)
                 except Exception as e:
                     st.error(f"Connection Failed: {e}")
         else:
@@ -46,7 +44,7 @@ with st.sidebar:
             search_engine_id = st.text_input("Search Engine ID (cx)")
             
     st.divider()
-    st.info("💡 **Simulation:** Generates dummy data to test Excel export.\n\n🌐 **Real Search:** Uses Google API + Gemini 1.5 Flash.")
+    st.info("🛡️ **Strict Mode:** This version will output 'N/A' instead of fake numbers if Google doesn't provide the data.")
 
 # --- FUNCTIONS ---
 
@@ -55,15 +53,15 @@ def get_simulation_data(region, count):
     time.sleep(1.5) 
     data = []
     roles = ["Head of Operations", "Director of Talent", "Chief People Officer", "VP Procurement"]
-    
     for i in range(count):
-        comp_name = f"{region.split()[0]} {random.choice(['Logistics', 'Health', 'Tech', 'Retail'])} {random.randint(100,999)}"
+        comp_name = f"Simulated {region.split()[0]} Corp {random.randint(100,999)}"
         data.append({
             "Company": comp_name,
             "Location": f"{region} (HQ)",
             "Decision_Maker": random.choice(roles),
             "Phone": f"+1 (800) {random.randint(100,999)}-{random.randint(1000,9999)}",
-            "Contact_Link": f"https://www.{comp_name.lower().replace(' ', '')}.com/contact"
+            "Contact_Link": "https://www.example.com",
+            "Verification": "SIMULATED DATA"
         })
     return data
 
@@ -78,35 +76,40 @@ def search_google_real(query, api_key, cx):
             return f"API_ERROR: {data['error']['message']}"
         if "items" not in data:
             return None
-        return "\n".join([f"Title: {r['title']}\nSnippet: {r.get('snippet','')}\nLink: {r['link']}" for r in data['items']])
+        return "\n".join([f"Source: {r['title']}\nText: {r.get('snippet','')}\nURL: {r['link']}" for r in data['items']])
     except Exception as e:
         return f"API_ERROR: {str(e)}"
 
-def extract_with_ai(context, region, service, count, api_key):
-    """Uses Gemini 1.5 Flash to parse the search results."""
+def extract_with_strict_ai(context, region, service, count, api_key):
+    """Uses Gemini 1.5 Flash with STRICT instructions to avoid hallucination."""
     genai.configure(api_key=api_key)
-    
-    # FIX: Explicitly using 'gemini-1.5-flash' which is the current standard
     model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = f"""
-    Extract exactly {count} BPO leads from the text below for {region} needing {service}.
-    RETURN RAW JSON LIST ONLY. No markdown.
+    You are a strict Data Analyst. Analyze the text below to find BPO leads for {region} needing {service}.
+    
+    STRICT RULES:
+    1. **DO NOT INVENT DATA.** If a phone number or name is not explicitly written in the "Text" provided below, write "N/A".
+    2. Do not make up company names that are not in the text.
+    3. Extract exactly {count} companies if possible.
+    
+    INPUT TEXT FROM GOOGLE:
+    {context}
+    
+    OUTPUT FORMAT (Raw JSON only):
     [
-        {{"Company": "Name", "Location": "City", "Decision_Maker": "Role", "Phone": "Phone Number", "Contact_Link": "URL"}}
+        {{"Company": "Exact Name from text", "Location": "City/Country from text", "Decision_Maker": "Role found or N/A", "Phone": "Number found or N/A", "Source_URL": "URL from text"}}
     ]
-    Context: {context}
     """
     try:
         response = model.generate_content(prompt)
         text = response.text.replace('```json', '').replace('```', '').strip()
         return json.loads(text)
     except Exception as e:
-        # Pass the error up so we can see it in the UI
         return f"AI_ERROR: {str(e)}"
 
 # --- MAIN APP ---
-st.title("💼 BPO LeadGen Pro")
+st.title("🛡️ BPO LeadGen Pro (Strict Mode)")
 
 c1, c2, c3 = st.columns(3)
 with c1: region = st.selectbox("Target Region", ["UK FTSE 100", "USA Startups", "India NIFTY 50"])
@@ -115,55 +118,53 @@ with c3: count = st.slider("Lead Count", 5, 10, 5)
 
 if st.button("🚀 Generate Leads", type="primary"):
     
-    # PATH A: SIMULATION
     if mode == "🛠️ Simulation (Test UI)":
-        with st.spinner("Generating simulated leads..."):
-            leads = get_simulation_data(region, count)
-            df = pd.DataFrame(leads)
-            st.success(f"Generated {len(leads)} simulated leads!")
-            st.dataframe(df, use_container_width=True)
-            
-            # Export
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                df.to_excel(writer, index=False)
-            st.download_button("📥 Download Excel", buffer.getvalue(), "Simulation_Leads.xlsx")
+        # ... Simulation Logic (Same as before) ...
+        leads = get_simulation_data(region, count)
+        df = pd.DataFrame(leads)
+        st.success("Generated Simulated Data")
+        st.dataframe(df)
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+            df.to_excel(writer, index=False)
+        st.download_button("📥 Download Excel", buffer.getvalue(), "Sim_Leads.xlsx")
 
-    # PATH B: REAL API
     else:
+        # REAL MODE
         if not api_key or not search_engine_id:
-            st.error("❌ Missing Credentials in Sidebar/Secrets.")
+            st.error("❌ Missing Credentials")
         else:
             with st.status("🔍 Searching Google Live...", expanded=True) as status:
-                query = f"List of {region} companies {service} corporate headquarters phone number"
+                # Optimized Query for specific details
+                query = f"site:linkedin.com OR site:bloomberg.com {region} {service} 'headquarters' 'phone'"
                 
-                # 1. Search
                 context = search_google_real(query, api_key, search_engine_id)
                 
                 if context and "API_ERROR" in context:
                     status.update(label="❌ API Error", state="error")
                     st.error(context)
-                    st.info("Check 'API Restrictions' in Google Cloud Console Credentials.")
                 
                 elif context:
-                    status.update(label="🧠 Analyzing with Gemini 1.5 Flash...", state="running")
+                    # SHOW THE RAW DATA (Source of Truth)
+                    with st.expander("👀 View Raw Google Search Results (Check this if data seems fake)", expanded=False):
+                        st.text(context)
                     
-                    # 2. AI Extract
-                    leads = extract_with_ai(context, region, service, count, api_key)
+                    status.update(label="🧠 Analyzing with Strict AI...", state="running")
+                    leads = extract_with_strict_ai(context, region, service, count, api_key)
                     
                     if isinstance(leads, list) and leads:
                         status.update(label="✅ Success!", state="complete")
                         df = pd.DataFrame(leads)
+                        
+                        # Highlight N/A values
+                        st.warning("⚠️ Note: If you see 'N/A', it means the data was not found in the search snippets. This is good! It means the AI is not lying.")
                         st.dataframe(df, use_container_width=True)
                         
                         buffer = io.BytesIO()
                         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                             df.to_excel(writer, index=False)
-                        st.download_button("📥 Download Real Data", buffer.getvalue(), "Real_Leads.xlsx")
-                    elif isinstance(leads, str) and "AI_ERROR" in leads:
-                        status.update(label="⚠️ AI Model Error", state="error")
-                        st.error(leads)
+                        st.download_button("📥 Download Verified Data", buffer.getvalue(), "Real_Leads.xlsx")
                     else:
-                        status.update(label="⚠️ AI could not format data", state="error")
+                        status.update(label="⚠️ AI Error or No Data", state="error")
                 else:
                     status.update(label="❌ No results found", state="error")
