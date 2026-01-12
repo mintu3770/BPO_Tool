@@ -61,7 +61,9 @@ def extract_leads_with_retry(context, region, service, count, retries=3):
         return []
     
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    # FIX: Switched to 'gemini-pro' which is universally available on v1beta
+    model = genai.GenerativeModel('gemini-pro')
     
     prompt = f"""
     You are a BPO Sales Lead Researcher.
@@ -97,6 +99,9 @@ def extract_leads_with_retry(context, region, service, count, retries=3):
                 wait_time = (attempt + 1) * 5
                 st.warning(f"⚠️ API Busy (Quota Limit). Retrying in {wait_time}s...")
                 time.sleep(wait_time)
+            elif "404" in str(e):
+                st.error("❌ Model Error: The API key cannot access the model. Try creating a new API key.")
+                return []
             else:
                 st.error(f"AI Extraction Error: {e}")
                 return []
