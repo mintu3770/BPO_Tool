@@ -8,7 +8,7 @@ import io
 import random
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="BPO LeadGen Pro (Strict Mode)", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="BPO LeadGen Pro", page_icon="💼", layout="wide")
 
 # --- SIDEBAR: CONFIGURATION ---
 with st.sidebar:
@@ -44,7 +44,7 @@ with st.sidebar:
             search_engine_id = st.text_input("Search Engine ID (cx)")
             
     st.divider()
-    st.info("🛡️ **Strict Mode:** Only extracts data when specific phone numbers are visible in the search snippet.")
+    st.info("💡 **Tip:** This tool hunts for 'Investor Relations' and 'Headquarters' pages to find real decision-maker numbers.")
 
 # --- FUNCTIONS ---
 
@@ -60,7 +60,7 @@ def get_simulation_data(region, count):
             "Location": f"{region} (HQ)",
             "Decision_Maker": random.choice(roles),
             "Phone": f"+1 (800) {random.randint(100,999)}-{random.randint(1000,9999)}",
-            "Contact_Link": "https://www.example.com",
+            "Source_URL": "https://www.example.com",
             "Verification": "SIMULATED DATA"
         })
     return data
@@ -76,29 +76,31 @@ def search_google_real(query, api_key, cx):
             return f"API_ERROR: {data['error']['message']}"
         if "items" not in data:
             return None
-        return "\n".join([f"Source: {r['title']}\nText: {r.get('snippet','')}\nURL: {r['link']}" for r in data['items']])
+        return "\n".join([f"Source: {r['title']}\nSnippet: {r.get('snippet','')}\nURL: {r['link']}" for r in data['items']])
     except Exception as e:
         return f"API_ERROR: {str(e)}"
 
-def extract_with_strict_ai(context, region, service, count, api_key):
-    """Uses Gemini 1.5 Flash with STRICT instructions."""
+def extract_with_smart_ai(context, region, service, count, api_key):
+    """Uses Gemini 1.5 Flash to extract data."""
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = f"""
-    You are a strict Data Analyst. Analyze the text below to find BPO leads for {region} needing {service}.
+    You are a BPO Research Analyst. Analyze the Google Search Results below.
     
-    STRICT RULES:
-    1. **DO NOT INVENT DATA.** If a phone number or name is not explicitly written in the "Text" provided below, write "N/A".
-    2. Do not make up company names.
-    3. Extract exactly {count} companies if possible.
+    GOAL: Find {count} companies in {region} that might need {service}.
     
-    INPUT TEXT FROM GOOGLE:
+    INSTRUCTIONS:
+    1. **Look for Phone Numbers:** Scan the 'Snippet' text for phone numbers (e.g., +1, +44, 020, 1-800).
+    2. **Strict Matching:** If a snippet has a Company Name but NO phone number, write "N/A" for the phone. Do not guess.
+    3. **Decision Maker:** Infer the likely department based on {service} (e.g., "HR Dept" for Hiring, "Procurement" for Sourcing).
+    
+    INPUT CONTEXT:
     {context}
     
-    OUTPUT FORMAT (Raw JSON only):
+    OUTPUT FORMAT (Return strictly a JSON list):
     [
-        {{"Company": "Exact Name from text", "Location": "City/Country from text", "Decision_Maker": "Role found or N/A", "Phone": "Number found or N/A", "Source_URL": "URL from text"}}
+        {{"Company": "Name", "Location": "City/Region", "Decision_Maker": "Department/Role", "Phone": "Extracted Number or N/A", "Source_URL": "Link"}}
     ]
     """
     try:
@@ -109,17 +111,28 @@ def extract_with_strict_ai(context, region, service, count, api_key):
         return f"AI_ERROR: {str(e)}"
 
 # --- MAIN APP ---
-st.title("🛡️ BPO LeadGen Pro (Strict Mode)")
+st.title("🛡️ BPO LeadGen Pro (Smart Search)")
+
+# Smart mappings to convert generic dropdowns into high-quality search terms
+REGION_MAP = {
+    "UK FTSE 100": "UK London corporate headquarters",
+    "USA Startups": "USA tech startup press contact San Francisco",
+    "India NIFTY 50": "India Mumbai corporate office contact"
+}
 
 c1, c2, c3 = st.columns(3)
-with c1: region = st.selectbox("Target Region", ["UK FTSE 100", "USA Startups", "India NIFTY 50"])
-with c2: service = st.selectbox("Service Pitch", ["Hiring", "Customer Support", "Sourcing"])
-with c3: count = st.slider("Lead Count", 5, 10, 5)
+with c1: 
+    region_select = st.selectbox("Target Region", list(REGION_MAP.keys()))
+    search_term = REGION_MAP[region_select] # Get the better search term
+with c2: 
+    service = st.selectbox("Service Pitch", ["Hiring", "Customer Support", "Sourcing"])
+with c3: 
+    count = st.slider("Lead Count", 5, 10, 5)
 
 if st.button("🚀 Generate Leads", type="primary"):
     
     if mode == "🛠️ Simulation (Test UI)":
-        leads = get_simulation_data(region, count)
+        leads = get_simulation_data(region_select, count)
         df = pd.DataFrame(leads)
         st.success("Generated Simulated Data")
         st.dataframe(df)
@@ -135,9 +148,9 @@ if st.button("🚀 Generate Leads", type="primary"):
         else:
             with st.status("🔍 Searching Google Live...", expanded=True) as status:
                 
-                # --- NEW AGGRESSIVE QUERY ---
-                # Forces Google to find pages with "Phone:" or "Tel:" in the text
-                query = f"{region} {service} company (site:contact OR site:about OR site:investors) 'Phone:' OR 'Tel:' OR 'Call us at'"
+                # --- SMART QUERY ENGINE ---
+                # This query specifically hunts for "Tel:" or "Phone:" in Investor/Press pages
+                query = f"{search_term} {service} (site:investors.* OR site:press.* OR site:contact.*) 'Phone:' OR 'Tel:' OR 'Call us'"
                 
                 context = search_google_real(query, api_key, search_engine_id)
                 
@@ -146,16 +159,19 @@ if st.button("🚀 Generate Leads", type="primary"):
                     st.error(context)
                 
                 elif context:
-                    # SHOW THE RAW DATA
-                    with st.expander("👀 View Raw Google Search Results (Verified Source)", expanded=False):
+                    # Show Raw Data for verification
+                    with st.expander("👀 View Raw Google Results", expanded=False):
                         st.text(context)
                     
-                    status.update(label="🧠 Analyzing with Strict AI...", state="running")
-                    leads = extract_with_strict_ai(context, region, service, count, api_key)
+                    status.update(label="🧠 Analyzing with AI...", state="running")
+                    leads = extract_with_smart_ai(context, region_select, service, count, api_key)
                     
                     if isinstance(leads, list) and leads:
                         status.update(label="✅ Success!", state="complete")
                         df = pd.DataFrame(leads)
+                        
+                        # Filter out rows where Company is N/A if any
+                        df = df[df['Company'] != "N/A"]
                         
                         st.dataframe(df, use_container_width=True)
                         
@@ -164,7 +180,7 @@ if st.button("🚀 Generate Leads", type="primary"):
                             df.to_excel(writer, index=False)
                         st.download_button("📥 Download Verified Data", buffer.getvalue(), "Real_Leads.xlsx")
                     else:
-                        status.update(label="⚠️ AI found no valid numbers in these results.", state="error")
-                        st.warning("The search results didn't contain visible phone numbers. Google sometimes hides digits in snippets. Try 'Simulation Mode' to test the Excel format.")
+                        status.update(label="⚠️ No structured data found.", state="error")
+                        st.warning("Google found results, but they didn't contain clear phone numbers in the text snippets. Try 'Simulation Mode' to test the Excel format.")
                 else:
                     status.update(label="❌ No results found", state="error")
