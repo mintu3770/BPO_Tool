@@ -29,9 +29,9 @@ logging.basicConfig(level=logging.INFO)
 # =====================================================
 
 REGION_MAP = {
-    "UK FTSE 100": "UK plc corporate office Contact phone number -news",
-    "USA Startups": "USA Inc headquarters Contact Us phone -news",
-    "India NIFTY 50": "India Limited company corporate office contact number -news"
+    "UK ": "UK plc corporate office Contact phone number -news",
+    "USA ": "USA Inc headquarters Contact Us phone -news",
+    "India ": "India Limited company corporate office contact number -news"
 }
 
 ROLES_BY_SERVICE = {
