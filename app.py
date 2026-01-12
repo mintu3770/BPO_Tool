@@ -44,7 +44,7 @@ with st.sidebar:
             search_engine_id = st.text_input("Search Engine ID (cx)")
             
     st.divider()
-    st.info("💡 **Tip:** This tool hunts for 'Investor Relations' and 'Headquarters' pages to find real decision-maker numbers.")
+    st.info("💡 **Tip:** Now searches specifically for 'Contact Us' and 'Head Office' pages, ignoring Investor News.")
 
 # --- FUNCTIONS ---
 
@@ -113,17 +113,18 @@ def extract_with_smart_ai(context, region, service, count, api_key):
 # --- MAIN APP ---
 st.title("🛡️ BPO LeadGen Pro (Smart Search)")
 
-# Smart mappings to convert generic dropdowns into high-quality search terms
+# --- FIXED MAPPING: REMOVED INVESTOR RESTRICTIONS ---
 REGION_MAP = {
-    "UK FTSE 100": "UK London corporate headquarters",
-    "USA Startups": "USA tech startup press contact San Francisco",
-    "India NIFTY 50": "India Mumbai corporate office contact"
+    # We search for "Head Office" and exclude "News" explicitly
+    "UK FTSE 100": "UK FTSE 100 'Head Office' contact number -news -jobs",
+    "USA Startups": "USA tech startup 'Corporate Headquarters' phone number -news -release",
+    "India NIFTY 50": "India NIFTY 50 'Registered Office' contact number -news -recruitment"
 }
 
 c1, c2, c3 = st.columns(3)
 with c1: 
     region_select = st.selectbox("Target Region", list(REGION_MAP.keys()))
-    search_term = REGION_MAP[region_select] # Get the better search term
+    search_term = REGION_MAP[region_select] 
 with c2: 
     service = st.selectbox("Service Pitch", ["Hiring", "Customer Support", "Sourcing"])
 with c3: 
@@ -148,9 +149,11 @@ if st.button("🚀 Generate Leads", type="primary"):
         else:
             with st.status("🔍 Searching Google Live...", expanded=True) as status:
                 
-                # --- SMART QUERY ENGINE ---
-                # This query specifically hunts for "Tel:" or "Phone:" in Investor/Press pages
-                query = f"{search_term} {service} (site:investors.* OR site:press.* OR site:contact.*) 'Phone:' OR 'Tel:' OR 'Call us'"
+                # --- FIXED QUERY ---
+                # 1. Removed 'site:investors' (Causes news results)
+                # 2. Added '-news' (Filters out articles)
+                # 3. Explicitly asks for "Phone" or "Tel"
+                query = f"{search_term} {service} 'Phone' OR 'Tel' OR 'Call us' -news -release"
                 
                 context = search_google_real(query, api_key, search_engine_id)
                 
@@ -159,7 +162,6 @@ if st.button("🚀 Generate Leads", type="primary"):
                     st.error(context)
                 
                 elif context:
-                    # Show Raw Data for verification
                     with st.expander("👀 View Raw Google Results", expanded=False):
                         st.text(context)
                     
@@ -170,7 +172,7 @@ if st.button("🚀 Generate Leads", type="primary"):
                         status.update(label="✅ Success!", state="complete")
                         df = pd.DataFrame(leads)
                         
-                        # Filter out rows where Company is N/A if any
+                        # Filter out empty rows
                         df = df[df['Company'] != "N/A"]
                         
                         st.dataframe(df, use_container_width=True)
@@ -181,6 +183,6 @@ if st.button("🚀 Generate Leads", type="primary"):
                         st.download_button("📥 Download Verified Data", buffer.getvalue(), "Real_Leads.xlsx")
                     else:
                         status.update(label="⚠️ No structured data found.", state="error")
-                        st.warning("Google found results, but they didn't contain clear phone numbers in the text snippets. Try 'Simulation Mode' to test the Excel format.")
+                        st.warning("Google found results, but they didn't contain clear phone numbers. Try 'Simulation Mode' to test the Excel format.")
                 else:
                     status.update(label="❌ No results found", state="error")
