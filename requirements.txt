@@ -4,3 +4,4 @@ requests
 pandas
 openpyxl
 xlsxwriter
+beautifulsoup4
