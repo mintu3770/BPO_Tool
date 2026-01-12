@@ -1,6 +1,5 @@
 # =====================================================
-# BPO LeadGen Pro – FINAL CLEAN DATA VERSION
-# Aggregator-Free | Company Websites Only
+# BPO LeadGen Pro – COMPANY WEBSITES ONLY (STRICT MODE)
 # =====================================================
 
 import streamlit as st
@@ -10,7 +9,7 @@ import time
 import io
 import random
 import re
-import logging
+from urllib.parse import urlparse
 
 # =====================================================
 # PAGE CONFIG
@@ -22,91 +21,64 @@ st.set_page_config(
     layout="wide"
 )
 
-logging.basicConfig(level=logging.INFO)
-
 # =====================================================
-# AGGREGATOR BLOCK LIST (CRITICAL)
+# BLOCK LISTS (CRITICAL)
 # =====================================================
 
 BLOCKED_DOMAINS = [
     "linkedin.com", "indeed.com", "glassdoor.com", "crunchbase.com",
     "angel.co", "startupindia.gov.in", "naukri.com", "monster.com",
     "ambitionbox.com", "owler.com", "zoominfo.com", "apollo.io",
-    "yelp.com", "facebook.com", "twitter.com", "instagram.com"
+    "yelp.com", "facebook.com", "twitter.com", "instagram.com",
+    "github.com", "medium.com", "wikipedia.org"
 ]
 
-BLOCK_SITES_QUERY = " ".join([f"-site:{d}" for d in BLOCKED_DOMAINS])
+BLOCKED_PATH_KEYWORDS = [
+    "/company", "/companies", "/profile", "/jobs", "/careers",
+    "/listing", "/directory", "/employers", "/reviews"
+]
 
 # =====================================================
-# REGION + COMPANY TYPE (SEARCH-LEVEL CONTROL)
+# REGION CONFIG (SEARCH-LEVEL ENFORCEMENT)
 # =====================================================
 
 REGION_MAP = {
-    # ---------------- UK ----------------
     "UK – Startups": {
         "gl": "uk",
-        "query": (
-            "UK startup technology company official website contact "
-            "site:co.uk -plc -bank -council -nhs -gov "
-            f"{BLOCK_SITES_QUERY}"
-        ),
-        "company_type": "Startup (Growth)"
+        "query": "UK startup technology company official website contact site:co.uk",
+        "company_type": "Startup"
     },
     "UK – Top Companies": {
         "gl": "uk",
-        "query": (
-            "FTSE 100 plc official website corporate contact "
-            "site:co.uk -startup "
-            f"{BLOCK_SITES_QUERY}"
-        ),
-        "company_type": "Enterprise (Established)"
+        "query": "FTSE 100 plc official website corporate contact site:co.uk",
+        "company_type": "Enterprise"
     },
-
-    # ---------------- USA ----------------
     "USA – Startups": {
         "gl": "us",
-        "query": (
-            "US startup technology company official website contact "
-            "-site:.gov -site:.edu -site:.mil "
-            f"{BLOCK_SITES_QUERY}"
-        ),
-        "company_type": "Startup (Growth)"
+        "query": "US startup technology company official website contact",
+        "company_type": "Startup"
     },
     "USA – Top Companies": {
         "gl": "us",
-        "query": (
-            "S&P 500 company official website corporate contact "
-            "-site:.gov -site:.edu -site:.mil "
-            f"{BLOCK_SITES_QUERY}"
-        ),
-        "company_type": "Enterprise (Established)"
+        "query": "S&P 500 company official website corporate contact",
+        "company_type": "Enterprise"
     },
-
-    # ---------------- INDIA ----------------
     "India – Startups": {
         "gl": "in",
-        "query": (
-            "Indian startup technology company official website contact "
-            "site:.in -bank -gov -nic "
-            f"{BLOCK_SITES_QUERY}"
-        ),
-        "company_type": "Startup (Growth)"
+        "query": "Indian startup technology company official website contact site:.in",
+        "company_type": "Startup"
     },
     "India – Top Companies": {
         "gl": "in",
-        "query": (
-            "NIFTY 50 listed company official website corporate contact "
-            "site:.in -startup "
-            f"{BLOCK_SITES_QUERY}"
-        ),
-        "company_type": "Enterprise (Established)"
+        "query": "NIFTY 50 listed company official website corporate contact site:.in",
+        "company_type": "Enterprise"
     },
 }
 
 ROLES_BY_SERVICE = {
-    "Hiring": ["HR Manager", "Head of Talent", "Chief People Officer"],
-    "Customer Support": ["Head of Operations", "Support Director"],
-    "Sourcing": ["Procurement Head", "VP Procurement"]
+    "Hiring": ["HR Manager", "Head of Talent"],
+    "Customer Support": ["Head of Operations"],
+    "Sourcing": ["Procurement Head"]
 }
 
 # =====================================================
@@ -118,19 +90,13 @@ with st.sidebar:
 
     mode = st.radio(
         "Mode",
-        ["🌐 Real Google Search", "🛠️ Simulation (Test UI)"],
+        ["🌐 Real Google Search", "🛠️ Simulation"],
         index=0
     )
 
     if mode == "🌐 Real Google Search":
         API_KEY = st.secrets.get("GOOGLE_API_KEY")
         CX_ID = st.secrets.get("SEARCH_ENGINE_ID")
-
-    st.divider()
-    st.info(
-        "Hunter Mode enabled. If a phone number is not visible, "
-        "the direct contact page link is saved instead."
-    )
 
 # =====================================================
 # UTILITIES
@@ -149,8 +115,23 @@ def clean_company_name(name):
     name = re.sub(r"Contact.*", "", name, flags=re.I)
     return name.strip()
 
-def is_blocked_url(url):
-    return any(domain in url.lower() for domain in BLOCKED_DOMAINS)
+def is_blocked_domain(url):
+    domain = urlparse(url).netloc.lower()
+    return any(b in domain for b in BLOCKED_DOMAINS)
+
+def is_blocked_path(url):
+    path = urlparse(url).path.lower()
+    return any(p in path for p in BLOCKED_PATH_KEYWORDS)
+
+def looks_like_company_domain(company, url):
+    """
+    Ensures domain matches company name roughly
+    """
+    domain = urlparse(url).netloc.lower()
+    domain = domain.replace("www.", "")
+
+    company_tokens = re.findall(r"[a-zA-Z]{3,}", company.lower())
+    return any(token in domain for token in company_tokens)
 
 # =====================================================
 # GOOGLE SEARCH
@@ -171,7 +152,7 @@ def search_google(query, api_key, cx, gl):
     data = res.json()
 
     if "items" not in data:
-        return None
+        return []
 
     results = []
     for item in data["items"]:
@@ -185,7 +166,7 @@ def search_google(query, api_key, cx, gl):
     return results
 
 # =====================================================
-# EXTRACTION (OFFICIAL WEBSITES ONLY)
+# STRICT EXTRACTION (COMPANY DOMAINS ONLY)
 # =====================================================
 
 def process_results(results, region_key, service, count):
@@ -195,14 +176,18 @@ def process_results(results, region_key, service, count):
     for r in results:
         url = r["url"]
 
-        # HARD BLOCK aggregators & social platforms
-        if is_blocked_url(url):
+        # HARD FILTERS
+        if is_blocked_domain(url):
+            continue
+        if is_blocked_path(url):
             continue
 
         company = clean_company_name(r["company_raw"])
-        snippet = r["snippet"]
 
-        phones = re.findall(r'(\+?\d[\d \-]{8,15})', snippet)
+        if not looks_like_company_domain(company, url):
+            continue
+
+        phones = re.findall(r'(\+?\d[\d \-]{8,15})', r["snippet"])
         phone = normalize_phone(phones[0]) if phones else "Visit Website"
 
         leads.append({
@@ -223,8 +208,8 @@ def process_results(results, region_key, service, count):
 # MAIN UI
 # =====================================================
 
-st.title("🛡️ BPO LeadGen Pro")
-st.caption("Official company websites only • No directories • No job portals")
+st.title("🛡️ BPO LeadGen Pro – Company Websites Only")
+st.caption("Strict mode: only official company domains are allowed")
 
 c1, c2, c3 = st.columns(3)
 with c1:
@@ -240,7 +225,7 @@ with c3:
 
 if st.button("🚀 Generate Leads", type="primary"):
 
-    if mode == "🛠️ Simulation (Test UI)":
+    if mode == "🛠️ Simulation":
         st.info("Simulation mode active.")
         st.stop()
 
@@ -253,18 +238,13 @@ if st.button("🚀 Generate Leads", type="primary"):
 
     st.write(f"**Debug Query:** `{query}`")
 
-    with st.status("🔍 Hunting clean company leads...", expanded=True):
+    with st.status("🔍 Searching official company websites...", expanded=True):
         results = search_google(query, API_KEY, CX_ID, cfg["gl"])
-
-        if not results:
-            st.error("No results found.")
-            st.stop()
-
         leads = process_results(results, region_key, service, count)
         df = pd.DataFrame(leads)
 
     if df.empty:
-        st.warning("No clean company websites found.")
+        st.warning("No official company websites found with strict rules.")
     else:
         st.dataframe(df, use_container_width=True)
 
@@ -275,5 +255,5 @@ if st.button("🚀 Generate Leads", type="primary"):
         st.download_button(
             "📥 Download Excel",
             buffer.getvalue(),
-            "BPO_Leads_Company_Websites_Only.xlsx"
+            "BPO_Company_Websites_Only.xlsx"
         )
