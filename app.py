@@ -1,5 +1,6 @@
 # =====================================================
-# BPO LeadGen Pro – COMPANY WEBSITES ONLY (STRICT MODE)
+# BPO LeadGen Pro – FINAL HARD BLOCK PATCH
+# No Academia | No Government | Company Websites Only
 # =====================================================
 
 import streamlit as st
@@ -22,20 +23,38 @@ st.set_page_config(
 )
 
 # =====================================================
-# BLOCK LISTS (CRITICAL)
+# HARD BLOCK LISTS (NON-NEGOTIABLE)
 # =====================================================
 
-BLOCKED_DOMAINS = [
-    "linkedin.com", "indeed.com", "glassdoor.com", "crunchbase.com",
-    "angel.co", "startupindia.gov.in", "naukri.com", "monster.com",
-    "ambitionbox.com", "owler.com", "zoominfo.com", "apollo.io",
-    "yelp.com", "facebook.com", "twitter.com", "instagram.com",
-    "github.com", "medium.com", "wikipedia.org"
+# 1️⃣ Blocked domains & TLDs
+BLOCKED_DOMAIN_KEYWORDS = [
+    # Aggregators / Social / Directories
+    "linkedin", "indeed", "glassdoor", "crunchbase", "angel",
+    "naukri", "monster", "ambitionbox", "owler", "zoominfo",
+    "apollo", "yelp", "facebook", "twitter", "instagram",
+    "github", "medium", "wikipedia",
+
+    # Government
+    "gov", "nic", "ministry", "startupindia", "startuptn",
+
+    # Academia
+    "ac.in", "edu", "edu.in", "ac.uk",
+    "iit", "iim", "iisc", "university", "college",
+    "institute", "school", "academy"
 ]
 
+# 2️⃣ Blocked URL path patterns
 BLOCKED_PATH_KEYWORDS = [
     "/company", "/companies", "/profile", "/jobs", "/careers",
     "/listing", "/directory", "/employers", "/reviews"
+]
+
+# 3️⃣ Blocked entity keywords (company name + URL text)
+BLOCKED_ENTITY_KEYWORDS = [
+    "iit", "iim", "iisc", "university", "college",
+    "institute", "school", "academy",
+    "government", "ministry", "department", "council",
+    "authority", "mission"
 ]
 
 # =====================================================
@@ -43,36 +62,38 @@ BLOCKED_PATH_KEYWORDS = [
 # =====================================================
 
 REGION_MAP = {
-    "UK – Startups": {
+    # ---------------- UK ----------------
+    "UK – Private Companies": {
         "gl": "uk",
-        "query": "UK startup technology company official website contact site:co.uk",
-        "company_type": "Startup"
+        "query": (
+            "UK private company official website services "
+            "site:co.uk "
+            "-plc -bank -university -college -ac.uk -gov"
+        ),
+        "company_type": "Private Company"
     },
-    "UK – Top Companies": {
-        "gl": "uk",
-        "query": "FTSE 100 plc official website corporate contact site:co.uk",
-        "company_type": "Enterprise"
-    },
-    "USA – Startups": {
+
+    # ---------------- USA ----------------
+    "USA – Private Companies": {
         "gl": "us",
-        "query": "US startup technology company official website contact",
-        "company_type": "Startup"
+        "query": (
+            "US private company official website services "
+            "-site:.gov -site:.edu -site:.mil "
+            "-university -college"
+        ),
+        "company_type": "Private Company"
     },
-    "USA – Top Companies": {
-        "gl": "us",
-        "query": "S&P 500 company official website corporate contact",
-        "company_type": "Enterprise"
-    },
-    "India – Startups": {
+
+    # ---------------- INDIA ----------------
+    "India – Private Companies": {
         "gl": "in",
-        "query": "Indian startup technology company official website contact site:.in",
-        "company_type": "Startup"
-    },
-    "India – Top Companies": {
-        "gl": "in",
-        "query": "NIFTY 50 listed company official website corporate contact site:.in",
-        "company_type": "Enterprise"
-    },
+        "query": (
+            "Indian private company official website services "
+            "site:.in "
+            "-gov -nic -ac -edu -university -college -institute"
+        ),
+        "company_type": "Private Company"
+    }
 }
 
 ROLES_BY_SERVICE = {
@@ -90,13 +111,22 @@ with st.sidebar:
 
     mode = st.radio(
         "Mode",
-        ["🌐 Real Google Search", "🛠️ Simulation"],
+        ["🌐 Real Google Search", "🛠️ Simulation (Test UI)"],
         index=0
     )
 
     if mode == "🌐 Real Google Search":
         API_KEY = st.secrets.get("GOOGLE_API_KEY")
         CX_ID = st.secrets.get("SEARCH_ENGINE_ID")
+
+    st.divider()
+    st.info(
+        "STRICT MODE ENABLED\n\n"
+        "• No universities\n"
+        "• No government\n"
+        "• No aggregators\n"
+        "• Company-owned websites only"
+    )
 
 # =====================================================
 # UTILITIES
@@ -117,21 +147,20 @@ def clean_company_name(name):
 
 def is_blocked_domain(url):
     domain = urlparse(url).netloc.lower()
-    return any(b in domain for b in BLOCKED_DOMAINS)
+    return any(b in domain for b in BLOCKED_DOMAIN_KEYWORDS)
 
 def is_blocked_path(url):
     path = urlparse(url).path.lower()
     return any(p in path for p in BLOCKED_PATH_KEYWORDS)
 
-def looks_like_company_domain(company, url):
-    """
-    Ensures domain matches company name roughly
-    """
-    domain = urlparse(url).netloc.lower()
-    domain = domain.replace("www.", "")
+def is_blocked_entity(company, url):
+    text = (company + " " + url).lower()
+    return any(k in text for k in BLOCKED_ENTITY_KEYWORDS)
 
-    company_tokens = re.findall(r"[a-zA-Z]{3,}", company.lower())
-    return any(token in domain for token in company_tokens)
+def looks_like_company_domain(company, url):
+    domain = urlparse(url).netloc.lower().replace("www.", "")
+    tokens = re.findall(r"[a-zA-Z]{3,}", company.lower())
+    return any(t in domain for t in tokens)
 
 # =====================================================
 # GOOGLE SEARCH
@@ -166,7 +195,7 @@ def search_google(query, api_key, cx, gl):
     return results
 
 # =====================================================
-# STRICT EXTRACTION (COMPANY DOMAINS ONLY)
+# STRICT EXTRACTION (FINAL FILTER)
 # =====================================================
 
 def process_results(results, region_key, service, count):
@@ -176,7 +205,7 @@ def process_results(results, region_key, service, count):
     for r in results:
         url = r["url"]
 
-        # HARD FILTERS
+        # HARD BLOCKS
         if is_blocked_domain(url):
             continue
         if is_blocked_path(url):
@@ -184,6 +213,8 @@ def process_results(results, region_key, service, count):
 
         company = clean_company_name(r["company_raw"])
 
+        if is_blocked_entity(company, url):
+            continue
         if not looks_like_company_domain(company, url):
             continue
 
@@ -208,8 +239,8 @@ def process_results(results, region_key, service, count):
 # MAIN UI
 # =====================================================
 
-st.title("🛡️ BPO LeadGen Pro – Company Websites Only")
-st.caption("Strict mode: only official company domains are allowed")
+st.title("🛡️ BPO LeadGen Pro — STRICT PRIVATE COMPANIES ONLY")
+st.caption("Zero academia • Zero government • Zero aggregators")
 
 c1, c2, c3 = st.columns(3)
 with c1:
@@ -225,7 +256,7 @@ with c3:
 
 if st.button("🚀 Generate Leads", type="primary"):
 
-    if mode == "🛠️ Simulation":
+    if mode == "🛠️ Simulation (Test UI)":
         st.info("Simulation mode active.")
         st.stop()
 
@@ -238,13 +269,16 @@ if st.button("🚀 Generate Leads", type="primary"):
 
     st.write(f"**Debug Query:** `{query}`")
 
-    with st.status("🔍 Searching official company websites...", expanded=True):
+    with st.status("🔍 Searching strictly private company websites...", expanded=True):
         results = search_google(query, API_KEY, CX_ID, cfg["gl"])
         leads = process_results(results, region_key, service, count)
         df = pd.DataFrame(leads)
 
     if df.empty:
-        st.warning("No official company websites found with strict rules.")
+        st.warning(
+            "No private companies found under strict rules.\n\n"
+            "This is expected when data purity is enforced."
+        )
     else:
         st.dataframe(df, use_container_width=True)
 
@@ -255,5 +289,5 @@ if st.button("🚀 Generate Leads", type="primary"):
         st.download_button(
             "📥 Download Excel",
             buffer.getvalue(),
-            "BPO_Company_Websites_Only.xlsx"
+            "BPO_Private_Companies_Only.xlsx"
         )
